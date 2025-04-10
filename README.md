@@ -13,6 +13,7 @@ The proxy uses the following environment variables:
 - `PORT`: The port to run the proxy server on (default: `8080`)
 - `OLLAMA_ENDPOINT`: The target Ollama endpoint to forward requests to (default: `http://localhost:11434`)
 - `API_KEY`: The API key to use for authentication (default: empty)
+- `GITHUB_TOKEN`: (Optional) GitHub token for auto-updates
 
 ## Usage
 
@@ -39,6 +40,37 @@ docker build -t ollama-proxy .
 
 # Run the container
 docker run -p 8080:8080 -e OLLAMA_ENDPOINT=https://my-ollama-server.example.com -e API_KEY=my-secret-key ollama-proxy
+```
+
+### Multi-platform Builds
+
+This application is built for multiple platforms:
+- macOS (Intel/AMD64 and Apple Silicon/ARM64)
+- Linux (AMD64 and ARM64)
+- Windows (AMD64 and ARM64)
+
+You can download the latest release from the [releases page](https://github.com/goophy/goophy/releases).
+
+### Auto-Update System
+
+The application includes an automatic update feature that:
+
+1. Checks for new versions on GitHub when the application starts
+2. Performs periodic checks every 24 hours
+3. Automatically downloads and applies updates in the background
+
+The auto-update system will handle the different archive formats for each platform:
+- `.tar.gz` for macOS and Linux
+- `.zip` for Windows
+
+To disable auto-updates, set the environment variable:
+```bash
+DISABLE_AUTO_UPDATE=true ./goophy
+```
+
+You can also customize the update check interval:
+```bash
+UPDATE_CHECK_INTERVAL=12h ./goophy
 ```
 
 ## API Endpoints

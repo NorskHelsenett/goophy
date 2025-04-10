@@ -1,4 +1,5 @@
-package main
+// Package proxy provides a reverse proxy for Ollama API
+package proxy
 
 import (
 	"bytes"
@@ -9,37 +10,49 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"strings"
 )
 
-func main() {
-	// Get environment variables
-	port := getEnv("PORT", "8080")
-	targetURL := getEnv("OLLAMA_ENDPOINT", "http://localhost:11434")
-	apiKey := getEnv("API_KEY", "")
+// OllamaProxy represents a proxy server for Ollama API
+type OllamaProxy struct {
+	port      string
+	targetURL *url.URL
+	apiKey    string
+	server    *http.Server
+}
 
+// NewOllamaProxy creates a new Ollama proxy
+func NewOllamaProxy(port, targetURL, apiKey string) (*OllamaProxy, error) {
 	// Add http:// prefix if no protocol is specified
 	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
 		targetURL = "http://" + targetURL
 		log.Printf("No protocol specified in OLLAMA_ENDPOINT, using: %s", targetURL)
 	}
 
-	// Log configuration
-	log.Printf("Starting Ollama proxy server on port %s", port)
-	log.Printf("Forwarding requests to: %s", targetURL)
-	if apiKey != "" {
-		log.Print("API Key authentication enabled")
-	}
-
 	// Parse the target URL
 	target, err := url.Parse(targetURL)
 	if err != nil {
-		log.Fatalf("Invalid target URL: %v", err)
+		return nil, fmt.Errorf("invalid target URL: %v", err)
+	}
+
+	return &OllamaProxy{
+		port:      port,
+		targetURL: target,
+		apiKey:    apiKey,
+	}, nil
+}
+
+// Start starts the proxy server
+func (p *OllamaProxy) Start() error {
+	// Log configuration
+	log.Printf("Starting Ollama proxy server on port %s", p.port)
+	log.Printf("Forwarding requests to: %s", p.targetURL.String())
+	if p.apiKey != "" {
+		log.Print("API Key authentication enabled")
 	}
 
 	// Create a reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy := httputil.NewSingleHostReverseProxy(p.targetURL)
 
 	// Customize the director function to add our authorization header and fix path issues
 	originalDirector := proxy.Director
@@ -51,16 +64,16 @@ func main() {
 		originalDirector(req)
 
 		// Set the Host header to the target host
-		req.Host = target.Host
+		req.Host = p.targetURL.Host
 
 		// Add the Authorization header if API key is set
-		if apiKey != "" {
-			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+		if p.apiKey != "" {
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", p.apiKey))
 		}
 
 		// Fix path handling issues
 		// First, normalize paths by removing trailing slashes
-		targetPath := strings.TrimSuffix(target.Path, "/")
+		targetPath := strings.TrimSuffix(p.targetURL.Path, "/")
 
 		// Special handling for Ollama paths
 		if strings.HasPrefix(originalPath, "/ollama/") {
@@ -87,8 +100,8 @@ func main() {
 		log.Printf("%s %s -> %s://%s%s",
 			req.Method,
 			originalPath,
-			target.Scheme,
-			target.Host,
+			p.targetURL.Scheme,
+			p.targetURL.Host,
 			req.URL.Path)
 	}
 
@@ -182,14 +195,23 @@ func main() {
 		proxy.ServeHTTP(w, r)
 	}
 
-	// Create and start the server
-	server := &http.Server{
-		Addr:    ":" + port,
+	// Create the server
+	p.server = &http.Server{
+		Addr:    ":" + p.port,
 		Handler: http.HandlerFunc(handler),
 	}
 
-	log.Printf("Ollama proxy server started at http://localhost:%s", port)
-	log.Fatal(server.ListenAndServe())
+	// Start the server (this will block until the server is stopped)
+	log.Printf("Ollama proxy server started at http://localhost:%s", p.port)
+	return p.server.ListenAndServe()
+}
+
+// Stop stops the proxy server
+func (p *OllamaProxy) Stop() error {
+	if p.server != nil {
+		return p.server.Close()
+	}
+	return nil
 }
 
 // Custom transport to preserve the original request and modify specific responses
@@ -265,15 +287,6 @@ func transformPsResponse(data []byte) ([]byte, error) {
 	}
 
 	return transformedData, nil
-}
-
-// Helper function to get environment variables with default values
-func getEnv(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
 }
 
 // addDefaultTagToModel adds ":latest" to model names that don't have a tag
