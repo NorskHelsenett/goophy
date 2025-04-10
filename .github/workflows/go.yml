@@ -63,11 +63,11 @@ jobs:
               format_overrides:
                 - goos: windows
                   format: zip
-              replacements:
-                darwin: macos
               files:
                 - LICENSE
                 - README.md
+              replacements:
+                darwin: macos
           checksum:
             name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
           changelog:
