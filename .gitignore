@@ -1,2 +1,4 @@
 __debug_*
 .env
+# Added by goreleaser init:
+dist/
