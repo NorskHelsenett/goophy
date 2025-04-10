@@ -19,8 +19,8 @@ import (
 
 var (
 	version     = "dev"    // Will be set during build
-	githubOwner = "oproxy" // TODO: replace with your GitHub username/organization
-	githubRepo  = "oproxy" // TODO: replace with your repo name
+	githubOwner = "jonasbg" // TODO: replace with your GitHub username/organization
+	githubRepo  = "goophy" // TODO: replace with your repo name
 )
 
 // UpdateOptions defines options for the auto-updater
@@ -190,7 +190,7 @@ func (u *AutoUpdater) findAssetForCurrentPlatform(release *github.RepositoryRele
 		os = "macos"
 	}
 
-	pattern := fmt.Sprintf("oproxy_.*_%s_%s", os, arch)
+	pattern := fmt.Sprintf("goophy_.*_%s_%s", os, arch)
 
 	for _, asset := range release.Assets {
 		name := asset.GetName()

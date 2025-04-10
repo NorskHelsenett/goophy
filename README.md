@@ -21,13 +21,13 @@ The proxy uses the following environment variables:
 
 ```bash
 # Build the application
-go build -o oproxy
+go build -o goophy
 
 # Run the proxy with default settings
-./oproxy
+./goophy
 
 # Run with custom settings
-PORT=9000 OLLAMA_ENDPOINT=https://my-ollama-server.example.com API_KEY=my-secret-key ./oproxy
+PORT=9000 OLLAMA_ENDPOINT=https://my-ollama-server.example.com API_KEY=my-secret-key ./goophy
 ```
 
 ### Docker
@@ -49,7 +49,7 @@ This application is built for multiple platforms:
 - Linux (AMD64 and ARM64)
 - Windows (AMD64 and ARM64)
 
-You can download the latest release from the [releases page](https://github.com/oproxy/oproxy/releases).
+You can download the latest release from the [releases page](https://github.com/goophy/goophy/releases).
 
 ### Auto-Update System
 
@@ -65,12 +65,12 @@ The auto-update system will handle the different archive formats for each platfo
 
 To disable auto-updates, set the environment variable:
 ```bash
-DISABLE_AUTO_UPDATE=true ./oproxy
+DISABLE_AUTO_UPDATE=true ./goophy
 ```
 
 You can also customize the update check interval:
 ```bash
-UPDATE_CHECK_INTERVAL=12h ./oproxy
+UPDATE_CHECK_INTERVAL=12h ./goophy
 ```
 
 ## API Endpoints
