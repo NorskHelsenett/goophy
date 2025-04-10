@@ -2,6 +2,8 @@
 
 A simple proxy server for Ollama that adds authentication to requests.
 
+![goopy](.github/.docs/goophy.jpg)
+
 ## Overview
 
 This proxy server forwards all requests to an Ollama API endpoint while adding an `Authorization: Bearer` token header for authentication. It supports all Ollama API endpoints and preserves original request methods, paths, headers, and bodies.
