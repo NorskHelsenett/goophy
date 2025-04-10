@@ -20,65 +20,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: '1.23'
 
-      - name: Get version from tag
-        id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
-
-      - name: Set up build matrix
-        id: matrix
-        run: |
-          echo "platforms=linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64,windows/arm64" >> $GITHUB_OUTPUT
-      
-      - name: Set up GoReleaser
-        uses: goreleaser/goreleaser-action@v5
-        with:
-          install-only: true
-      
-      - name: Create .goreleaser.yml
-        run: |
-          cat > .goreleaser.yml << 'EOL'
-          version: 1
-          builds:
-            - env:
-                - CGO_ENABLED=0
-              goos:
-                - linux
-                - darwin
-                - windows
-              goarch:
-                - amd64
-                - arm64
-              ldflags:
-                - -s -w -X main.version={{.Version}}
-              binary: goophy
-          archives:
-            - format: tar.gz
-              name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-              format_overrides:
-                - goos: windows
-                  format: zip
-              files:
-                - LICENSE
-                - README.md
-              replacements:
-                darwin: macos
-          checksum:
-            name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
-          changelog:
-            sort: asc
-            filters:
-              exclude:
-                - '^docs:'
-                - '^test:'
-                - '^chore:'
-          EOL
-      
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v5
         with:
