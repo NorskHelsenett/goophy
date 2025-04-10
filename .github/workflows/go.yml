@@ -43,7 +43,7 @@ jobs:
       - name: Create .goreleaser.yml
         run: |
           cat > .goreleaser.yml << 'EOL'
-          version: 2
+          version: 1
           builds:
             - env:
                 - CGO_ENABLED=0
