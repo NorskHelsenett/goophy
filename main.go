@@ -14,6 +14,11 @@ import (
 )
 
 func main() {
+	// Initialize auto-updater with default options
+	updater := NewAutoUpdater(DefaultUpdateOptions())
+	updater.Start()
+	defer updater.Stop()
+
 	// Get environment variables
 	port := getEnv("PORT", "8080")
 	targetURL := getEnv("OLLAMA_ENDPOINT", "http://localhost:11434")
