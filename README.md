@@ -13,7 +13,7 @@ The proxy uses the following environment variables:
 - `PORT`: The port to run the proxy server on (default: `8080`)
 - `OLLAMA_ENDPOINT`: The target Ollama endpoint to forward requests to (default: `http://localhost:11434`)
 - `API_KEY`: The API key to use for authentication (default: empty)
-- `GITHUB_TOKEN`: (Optional) GitHub token for auto-updates
+- `DISABLE_AUTO_UPDATE`: Disable auto update for the goophy.
 
 ## Usage
 
@@ -21,13 +21,13 @@ The proxy uses the following environment variables:
 
 ```bash
 # Build the application
-go build -o goophy
+go build -o goophy cmd/goophy/main.go
 
 # Run the proxy with default settings
 ./goophy
 
 # Run with custom settings
-PORT=9000 OLLAMA_ENDPOINT=https://my-ollama-server.example.com API_KEY=my-secret-key ./goophy
+PORT=22434 OLLAMA_ENDPOINT=https://my-ollama-server.example.com API_KEY=my-secret-key ./goophy
 ```
 
 ### Docker
@@ -39,7 +39,7 @@ You can also build and run this proxy in Docker:
 docker build -t ollama-proxy .
 
 # Run the container
-docker run -p 8080:8080 -e OLLAMA_ENDPOINT=https://my-ollama-server.example.com -e API_KEY=my-secret-key ollama-proxy
+docker run -p 22434:8080 -e OLLAMA_ENDPOINT=https://my-ollama-server.example.com -e API_KEY=my-secret-key ollama-proxy
 ```
 
 ### Multi-platform Builds
@@ -50,6 +50,14 @@ This application is built for multiple platforms:
 - Windows (AMD64 and ARM64)
 
 You can download the latest release from the [releases page](https://github.com/goophy/goophy/releases).
+
+### Tips
+
+```bash
+echo 'export OLLAMA_HOST="http://localhost:22434"' >> .zshrc
+```
+
+By exporting the `OLLAMA_HOST` environment its possible to use `ollama ps|run|pull|rm...` without specifying this environment for every request.
 
 ### Auto-Update System
 
