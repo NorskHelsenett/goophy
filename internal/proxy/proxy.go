@@ -155,6 +155,19 @@ func (p *OllamaProxy) Start() error {
 							}
 						}
 
+						// Special handling for /api/show endpoint - Ollama expects "name" instead of "model"
+						if strings.HasSuffix(r.URL.Path, "/api/show") {
+							// Check if we have a model field but no name field
+							if modelName, ok := bodyJSON["model"].(string); ok {
+								if _, hasName := bodyJSON["name"]; !hasName {
+									bodyJSON["name"] = modelName
+									delete(bodyJSON, "model") // Remove the model field to avoid confusion
+									log.Printf("Transformed field for /api/show: 'model' -> 'name': %s", modelName)
+									modified = true
+								}
+							}
+						}
+
 						// Restore the body - use modified JSON if we made changes, otherwise use original bytes
 						if modified {
 							modifiedBody, err := json.Marshal(bodyJSON)
@@ -228,6 +241,21 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// Log the response status
 	log.Printf("%s %s -> %d", req.Method, req.URL.Path, resp.StatusCode)
+
+	// Debug non-200 responses
+	if resp.StatusCode != http.StatusOK {
+		// Read the response body for logging
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			log.Printf("Error reading error response body: %v", err)
+		} else {
+			// Log the error response body
+			log.Printf("ERROR RESPONSE (%d): %s", resp.StatusCode, string(respBody))
+		}
+		// Restore the response body so it can be read again by downstream code
+		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+	}
 
 	// Special handling for the /api/ps endpoint to transform response format
 	if strings.HasSuffix(t.originalPath, "/api/ps") && resp.StatusCode == http.StatusOK {
