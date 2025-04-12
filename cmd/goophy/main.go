@@ -30,7 +30,7 @@ func main() {
 	defer autoUpdater.Stop()
 
 	// Get environment variables
-	port := getEnv("PORT", "8080")
+	port := getEnv("PORT", "22434")
 	targetURL := getEnv("OLLAMA_ENDPOINT", "http://localhost:11434")
 	apiKey := getEnv("API_KEY", "")
 

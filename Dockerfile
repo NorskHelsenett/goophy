@@ -20,13 +20,13 @@ WORKDIR /app
 COPY --from=builder /app/goophy .
 
 # Set environment variables with defaults
-ENV PORT=8080
+ENV PORT=22434
 ENV OLLAMA_ENDPOINT=http://localhost:11434
 ENV API_KEY=""
 ENV DISABLE_AUTO_UPDATE=true
 
 # Expose the port
-EXPOSE 8080
+EXPOSE 22434
 
 # Run the application
 CMD ["/app/goophy"]

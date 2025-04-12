@@ -12,7 +12,7 @@ This proxy server forwards all requests to an Ollama API endpoint while adding a
 
 The proxy uses the following environment variables:
 
-- `PORT`: The port to run the proxy server on (default: `8080`)
+- `PORT`: The port to run the proxy server on (default: `22434`)
 - `OLLAMA_ENDPOINT`: The target Ollama endpoint to forward requests to (default: `http://localhost:11434`)
 - `API_KEY`: The API key to use for authentication (default: empty)
 - `DISABLE_AUTO_UPDATE`: Disable auto update for the goophy.
@@ -41,7 +41,7 @@ You can also build and run this proxy in Docker:
 docker build -t ollama-proxy .
 
 # Run the container
-docker run -p 22434:8080 -e OLLAMA_ENDPOINT=https://my-ollama-server.example.com -e API_KEY=my-secret-key ollama-proxy
+docker run -p 22434:22434 -e OLLAMA_ENDPOINT=https://my-ollama-server.example.com -e API_KEY=my-secret-key ollama-proxy
 ```
 
 ### Multi-platform Builds
@@ -100,7 +100,7 @@ Common endpoints include:
 
 ```bash
 # Call the proxy to chat with a model
-curl -X POST http://localhost:8080/api/chat -d '{
+curl -X POST http://localhost:22434/api/chat -d '{
   "model": "llama3.2",
   "messages": [{"role": "user", "content": "Hello, how are you?"}]
 }'
