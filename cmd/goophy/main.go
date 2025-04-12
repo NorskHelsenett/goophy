@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"log"
 	"os"
 
@@ -8,7 +10,20 @@ import (
 	"github.com/jonasbg/goophy/internal/updater"
 )
 
+// Set by GoReleaser via ldflags: -X main.version=...
+var version = "dev"
+
 func main() {
+	// Define a version flag
+	showVersion := flag.Bool("version", false, "Print the version and exit")
+	flag.BoolVar(showVersion, "v", false, "Print the version and exit (shorthand)")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("goophy version:", version)
+		os.Exit(0)
+	}
+
 	// Initialize auto-updater with default options
 	autoUpdater := updater.New(updater.DefaultOptions())
 	autoUpdater.Start()
