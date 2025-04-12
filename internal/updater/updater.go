@@ -20,7 +20,6 @@ import (
 )
 
 var (
-	version     = "dev"     // Will be set during build
 	githubOwner = "jonasbg" // GitHub username/organization
 	githubRepo  = "goophy"  // GitHub repository name
 )
@@ -36,7 +35,7 @@ type Options struct {
 }
 
 // DefaultOptions returns the default update options
-func DefaultOptions() Options {
+func DefaultOptions(currentVersion string) Options {
 	// Parse environment variables
 	disableAutoUpdate := strings.ToLower(os.Getenv("DISABLE_AUTO_UPDATE")) == "true"
 
@@ -51,7 +50,7 @@ func DefaultOptions() Options {
 	}
 
 	return Options{
-		CurrentVersion:     version,
+		CurrentVersion:     currentVersion,
 		CheckInterval:      checkInterval,
 		AutoDownload:       true,
 		GithubTokenEnvVar:  "GITHUB_TOKEN",

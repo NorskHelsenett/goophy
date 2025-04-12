@@ -25,7 +25,7 @@ func main() {
 	}
 
 	// Initialize auto-updater with default options
-	autoUpdater := updater.New(updater.DefaultOptions())
+	autoUpdater := updater.New(updater.DefaultOptions(version))
 	autoUpdater.Start()
 	defer autoUpdater.Stop()
 
