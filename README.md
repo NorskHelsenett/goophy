@@ -53,6 +53,8 @@ This application is built for multiple platforms:
 
 You can download the latest release from the [releases page](https://github.com/goophy/goophy/releases).
 
+> To run this on MacOSX due to Gatekeeper, you have to add this binary to the allowlist by running `xattr -d com.apple.quarantine ~/.local/bin/goophy`
+
 ### Tips
 
 ```bash
