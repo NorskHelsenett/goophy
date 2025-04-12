@@ -16,14 +16,22 @@ before:
     - go generate ./...
 
 builds:
-  - env:
+  - id: goophy
+    env:
       - CGO_ENABLED=0
+    main: ./cmd/goophy
+    binary: goophy
     goos:
       - linux
       - windows
       - darwin
-    main: ./cmd/goophy
-    binary: goophy
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    flags:
+      - -trimpath
 
 archives:
   - formats: [tar.gz]
