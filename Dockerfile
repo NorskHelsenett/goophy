@@ -1,5 +1,8 @@
 FROM golang:1.23-alpine AS builder
 
+# Install ca-certificates
+RUN apk --no-cache add ca-certificates
+
 WORKDIR /app
 
 # Copy go mod file
@@ -11,13 +14,14 @@ COPY . ./
 RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s -extldflags '-static'" -o goophy ./cmd/goophy
 
-# Create a minimal production image from scratch (no OS)
+# Final minimal image
 FROM scratch
 
 WORKDIR /app
 
-# Copy the static binary from the builder stage
+# Copy the static binary and CA certs from builder
 COPY --from=builder /app/goophy .
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # Set environment variables with defaults
 ENV PORT=22434

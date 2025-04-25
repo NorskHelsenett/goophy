@@ -16,6 +16,7 @@ The proxy uses the following environment variables:
 - `OLLAMA_ENDPOINT`: The target Ollama endpoint to forward requests to (default: `http://localhost:11434`)
 - `API_KEY`: The API key to use for authentication (default: empty)
 - `DISABLE_AUTO_UPDATE`: Disable auto update for the goophy.
+- `UPDATE_CHECK_INTERVAL`: How often to check for updates (default: 24h)
 
 ## Usage
 
@@ -43,6 +44,10 @@ docker build -t ollama-proxy .
 # Run the container
 docker run -p 22434:22434 -e OLLAMA_ENDPOINT=https://my-ollama-server.example.com -e API_KEY=my-secret-key ollama-proxy
 ```
+
+### OpenWebUI
+
+OpenWebUI is accessible at the `/ollama` endpoint, so using it would be like `example.com/ollama`.
 
 ### Multi-platform Builds
 
