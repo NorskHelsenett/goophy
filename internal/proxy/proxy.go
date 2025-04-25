@@ -108,6 +108,7 @@ func (p *OllamaProxy) Start() error {
 	// Create a custom transport that preserves the original request and modifies specific responses
 	proxy.Transport = &customTransport{
 		originalPath: "",
+		maxRedirects: 10, // Default to 10 redirects, which is Go's default
 	}
 
 	// Create a handler function
@@ -230,11 +231,52 @@ func (p *OllamaProxy) Stop() error {
 // Custom transport to preserve the original request and modify specific responses
 type customTransport struct {
 	originalPath string
+	maxRedirects int // Maximum number of redirects to follow
 }
 
 func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Use the default transport to perform the request
-	resp, err := http.DefaultTransport.RoundTrip(req)
+	// Create a redirect-enabled client for following redirects
+	client := &http.Client{
+		Transport: http.DefaultTransport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Log the redirect
+			if len(via) > 0 {
+				log.Printf("Following redirect: %s -> %s", via[len(via)-1].URL.String(), req.URL.String())
+			}
+			
+			// Stop after maxRedirects
+			if len(via) >= t.maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", t.maxRedirects)
+			}
+			
+			// Copy headers from the original request
+			for key, vals := range via[0].Header {
+				// Skip headers that are set by the Go stdlib
+				if key == "Authorization" || key == "User-Agent" || key == "Content-Length" {
+					continue
+				}
+				req.Header[key] = vals
+			}
+			
+			return nil
+		},
+	}
+
+	// Create a clean request without the RequestURI field
+	// which isn't allowed in client requests
+	newReq, err := http.NewRequest(req.Method, req.URL.String(), req.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error creating clean request: %w", err)
+	}
+
+	// Copy all headers from the original request
+	for key, vals := range req.Header {
+		newReq.Header[key] = vals
+	}
+
+	// Execute the request using our client
+	// Using the clean request prevents RequestURI errors
+	resp, err := client.Do(newReq)
 	if err != nil {
 		return nil, err
 	}
