@@ -274,8 +274,23 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		newReq.Header[key] = vals
 	}
 
+	// Store original body for potential reuse
+	var originalBody []byte
+	if req.Body != nil && (req.Method == "POST" && (strings.HasSuffix(req.URL.Path, "/api/run") || strings.HasSuffix(req.URL.Path, "/api/generate"))) {
+		// Read and store the body for model name extraction and request retry
+		originalBody, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("error reading request body: %w", err)
+		}
+		req.Body.Close()
+		
+		// Replace the body for the current request
+		newReq.Body = io.NopCloser(bytes.NewReader(originalBody))
+		newReq.ContentLength = int64(len(originalBody))
+		newReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(originalBody)))
+	}
+
 	// Execute the request using our client
-	// Using the clean request prevents RequestURI errors
 	resp, err := client.Do(newReq)
 	if err != nil {
 		return nil, err
@@ -284,8 +299,134 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Log the response status
 	log.Printf("%s %s -> %d", req.Method, req.URL.Path, resp.StatusCode)
 
-	// Debug non-200 responses
-	if resp.StatusCode != http.StatusOK {
+	// Handle case where model doesn't exist (for /api/run and /api/generate endpoints)
+	if resp.StatusCode == http.StatusBadRequest && 
+	   (strings.HasSuffix(req.URL.Path, "/api/run") || strings.HasSuffix(req.URL.Path, "/api/generate")) && 
+	   originalBody != nil {
+		
+		// Read the error response body
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			log.Printf("Error reading error response body: %v", err)
+			// Restore the response body and return original error
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			return resp, nil
+		}
+		
+		// Check if the error is about a missing model
+		var errorResp map[string]interface{}
+		if err := json.Unmarshal(respBody, &errorResp); err == nil {
+			if errMsg, ok := errorResp["error"].(string); ok && 
+			   (strings.Contains(errMsg, "model not found") || 
+				strings.Contains(errMsg, "no model") || 
+				strings.Contains(errMsg, "model") && strings.Contains(errMsg, "not found")) {
+				
+				// Extract model name from original request
+				var bodyJSON map[string]interface{}
+				modelName := ""
+				if err := json.Unmarshal(originalBody, &bodyJSON); err == nil {
+					// Check model field first, then name field
+					if model, ok := bodyJSON["model"].(string); ok {
+						modelName = model
+					} else if name, ok := bodyJSON["name"].(string); ok {
+						modelName = name
+					}
+				}
+				
+				if modelName != "" {
+					log.Printf("Model '%s' not found. Attempting to pull the model first...", modelName)
+					
+					// Construct the pull request URL
+					pullURL := fmt.Sprintf("%s://%s/api/pull", req.URL.Scheme, req.URL.Host)
+					
+					// Create pull request body
+					pullBody := map[string]interface{}{
+						"name": modelName,
+					}
+					pullJSON, _ := json.Marshal(pullBody)
+					
+					// Create the pull request
+					pullReq, err := http.NewRequest("POST", pullURL, bytes.NewReader(pullJSON))
+					if err != nil {
+						log.Printf("Error creating pull request: %v", err)
+						// Return original error response
+						resp.Body = io.NopCloser(bytes.NewReader(respBody))
+						return resp, nil
+					}
+					
+					// Copy relevant headers
+					pullReq.Header.Set("Content-Type", "application/json")
+					if auth := req.Header.Get("Authorization"); auth != "" {
+						pullReq.Header.Set("Authorization", auth)
+					}
+					
+					log.Printf("Sending pull request for model: %s", modelName)
+					
+					// Execute pull request
+					pullResp, err := client.Do(pullReq)
+					if err != nil {
+						log.Printf("Error during model pull: %v", err)
+						// Return original error response
+						resp.Body = io.NopCloser(bytes.NewReader(respBody))
+						return resp, nil
+					}
+					defer pullResp.Body.Close()
+					
+					// Check if pull was successful
+					if pullResp.StatusCode != http.StatusOK {
+						pullRespBody, _ := io.ReadAll(pullResp.Body)
+						log.Printf("Pull request failed with status %d: %s", pullResp.StatusCode, string(pullRespBody))
+						// Return original error response
+						resp.Body = io.NopCloser(bytes.NewReader(respBody))
+						return resp, nil
+					}
+					
+					// Read pull response body to ensure it completes
+					_, err = io.Copy(io.Discard, pullResp.Body)
+					if err != nil {
+						log.Printf("Error reading pull response: %v", err)
+						// Return original error response
+						resp.Body = io.NopCloser(bytes.NewReader(respBody))
+						return resp, nil
+					}
+					
+					log.Printf("Successfully pulled model: %s. Retrying original request...", modelName)
+					
+					// Recreate the original request
+					retryReq, err := http.NewRequest(req.Method, req.URL.String(), bytes.NewReader(originalBody))
+					if err != nil {
+						log.Printf("Error recreating original request: %v", err)
+						// Return original error response
+						resp.Body = io.NopCloser(bytes.NewReader(respBody))
+						return resp, nil
+					}
+					
+					// Copy all headers from the original request
+					for key, vals := range req.Header {
+						retryReq.Header[key] = vals
+					}
+					
+					// Execute the retry request
+					retryResp, err := client.Do(retryReq)
+					if err != nil {
+						log.Printf("Error during retry request: %v", err)
+						// Return original error response
+						resp.Body = io.NopCloser(bytes.NewReader(respBody))
+						return resp, nil
+					}
+					
+					// Return the retry response
+					log.Printf("Retry request completed with status: %d", retryResp.StatusCode)
+					return retryResp, nil
+				}
+			}
+		}
+		
+		// If we couldn't handle the error, restore the body and return the original response
+		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+	} else if resp.StatusCode != http.StatusOK {
+		// Debug non-200 responses
 		// Read the response body for logging
 		respBody, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
