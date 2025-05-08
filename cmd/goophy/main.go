@@ -32,8 +32,6 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "  Goophy is a reverse proxy for Ollama API that provides additional features:\n")
 	fmt.Fprintf(os.Stderr, "   - Automatic updates\n")
 	fmt.Fprintf(os.Stderr, "   - API key authentication\n")
-	fmt.Fprintf(os.Stderr, "   - Automatic model pulling\n")
-	fmt.Fprintf(os.Stderr, "   - Response format transformation\n")
 	fmt.Fprintf(os.Stderr, "   - CORS support for browser applications\n\n")
 	
 	fmt.Fprintf(os.Stderr, "Example usage:\n")
@@ -108,15 +106,32 @@ func serveCommand(args []string) {
 		os.Exit(0)
 	}
 
-	// Initialize auto-updater with default options
-	autoUpdater := updater.New(updater.DefaultOptions(version))
-	autoUpdater.Start()
-	defer autoUpdater.Stop()
-
 	// Get environment variables
 	port := getEnv("PORT", "22434")
 	targetURL := getEnv("OLLAMA_ENDPOINT", "http://localhost:11434")
 	apiKey := getEnv("API_KEY", "")
+
+	// Display configured environment variables
+	fmt.Println("Starting with configuration:")
+	fmt.Printf("  PORT:             %s\n", port)
+	fmt.Printf("  OLLAMA_ENDPOINT:  %s\n", targetURL)
+	
+	// Mask API key if present
+	apiKeyDisplay := "Not configured"
+	if apiKey != "" {
+		// Show only first and last character if key is long enough
+		if len(apiKey) > 5 {
+			apiKeyDisplay = fmt.Sprintf("%s***%s", apiKey[:1], apiKey[len(apiKey)-1:])
+		} else {
+			apiKeyDisplay = "******" // Mask completely if too short
+		}
+	}
+	fmt.Printf("  API_KEY:          %s\n\n", apiKeyDisplay)
+
+	// Initialize auto-updater with default options
+	autoUpdater := updater.New(updater.DefaultOptions(version))
+	autoUpdater.Start()
+	defer autoUpdater.Stop()
 
 	// First ping the endpoint to ensure it's accessible
 	fmt.Printf("Checking Ollama endpoint at %s...\n", targetURL)
@@ -124,6 +139,7 @@ func serveCommand(args []string) {
 		fmt.Fprintf(os.Stderr, "Error connecting to Ollama endpoint: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Println("Ollama endpoint is accessible.")
 
 	// Create the proxy
 	ollamaProxy, err := proxy.NewOllamaProxy(port, targetURL, apiKey)
