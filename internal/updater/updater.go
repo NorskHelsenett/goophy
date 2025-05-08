@@ -191,11 +191,16 @@ func (u *AutoUpdater) findAssetForCurrentPlatform(release *github.RepositoryRele
 		os = "macos"
 	}
 
-	pattern := fmt.Sprintf("goophy_.*_%s_%s", os, arch)
-
+	// The GitHub release assets might have capitalized OS names like "Linux" instead of "linux"
+	// We'll handle this by doing a case-insensitive comparison
 	for _, asset := range release.Assets {
 		name := asset.GetName()
-		if strings.Contains(strings.ToLower(name), strings.ToLower(pattern)) {
+		nameLower := strings.ToLower(name)
+		osLower := strings.ToLower(os)
+		archLower := strings.ToLower(arch)
+		
+		// Check if the asset name contains both the OS and architecture
+		if strings.Contains(nameLower, osLower) && strings.Contains(nameLower, archLower) {
 			return asset, nil
 		}
 	}
