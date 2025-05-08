@@ -21,7 +21,8 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "  -v, --version  Print the version and exit\n\n")
 	
 	fmt.Fprintf(os.Stderr, "Commands:\n")
-	fmt.Fprintf(os.Stderr, "  serve          Start the Ollama proxy server\n\n")
+	fmt.Fprintf(os.Stderr, "  serve          Start the Ollama proxy server\n")
+	fmt.Fprintf(os.Stderr, "  update         Check for and apply available updates\n\n")
 	
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
@@ -53,6 +54,20 @@ func printServeHelp() {
 	fmt.Fprintf(os.Stderr, "  OLLAMA_ENDPOINT=http://my-ollama-server:11434 API_KEY=secret123 goophy serve\n\n")
 }
 
+func printUpdateHelp() {
+	fmt.Fprintf(os.Stderr, "Goophy - Ollama API Proxy, version %s\n\n", version)
+	fmt.Fprintf(os.Stderr, "Usage: goophy update [options]\n\n")
+	fmt.Fprintf(os.Stderr, "Options:\n")
+	fmt.Fprintf(os.Stderr, "  -h, --help     Show this help message and exit\n\n")
+
+	fmt.Fprintf(os.Stderr, "Description:\n")
+	fmt.Fprintf(os.Stderr, "  Checks for and applies available updates for Goophy.\n")
+	fmt.Fprintf(os.Stderr, "  If running a development version (dev), updates are not available.\n\n")
+
+	fmt.Fprintf(os.Stderr, "Example usage:\n")
+	fmt.Fprintf(os.Stderr, "  goophy update\n\n")
+}
+
 func main() {
 	// Global flags
 	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
@@ -77,6 +92,8 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		serveCommand(os.Args[2:])
+	case "update":
+		updateCommand(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", os.Args[1])
 		printGlobalHelp()
@@ -133,13 +150,10 @@ func serveCommand(args []string) {
 	autoUpdater.Start()
 	defer autoUpdater.Stop()
 
-	// First ping the endpoint to ensure it's accessible
-	fmt.Printf("Checking Ollama endpoint at %s...\n", targetURL)
 	if err := proxy.PingEndpoint(targetURL, apiKey); err != nil {
 		fmt.Fprintf(os.Stderr, "Error connecting to Ollama endpoint: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("Ollama endpoint is accessible.")
 
 	// Create the proxy
 	ollamaProxy, err := proxy.NewOllamaProxy(port, targetURL, apiKey)
@@ -149,6 +163,68 @@ func serveCommand(args []string) {
 
 	// Start the server (this will block until the server is stopped)
 	log.Fatal(ollamaProxy.Start())
+}
+
+func updateCommand(args []string) {
+	// Setup flags for update command
+	updateFlags := flag.NewFlagSet("update", flag.ExitOnError)
+	showHelp := updateFlags.Bool("help", false, "Show help message for update command")
+	updateFlags.BoolVar(showHelp, "h", false, "Show help message for update command (shorthand)")
+
+	// Set custom usage function
+	updateFlags.Usage = printUpdateHelp
+
+	// Parse update command flags
+	err := updateFlags.Parse(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Show help if requested
+	if *showHelp {
+		printUpdateHelp()
+		os.Exit(0)
+	}
+
+	// Don't allow updates for dev version
+	if version == "dev" {
+		fmt.Println("Running development version, updates not available.")
+		fmt.Println("Please build from source or download a released version.")
+		os.Exit(0)
+	}
+
+	// Create updater
+	fmt.Printf("Current version: %s\n", version)
+	fmt.Println("Checking for updates...")
+	
+	autoUpdater := updater.New(updater.DefaultOptions(version))
+	
+	// Check for updates first
+	updateInfo, err := autoUpdater.CheckForUpdates()
+	if err != nil {
+		fmt.Printf("Error checking for updates: %v\n", err)
+		os.Exit(1)
+	}
+	
+	if !updateInfo.IsUpdateAvailable {
+		fmt.Printf("Already running the latest version: %s\n", updateInfo.CurrentVersion)
+		os.Exit(0)
+	}
+	
+	fmt.Printf("New version available: %s\n", updateInfo.LatestVersion)
+	fmt.Println("Downloading and applying update...")
+	
+	// Apply update
+	err = autoUpdater.ApplyUpdate()
+	if err != nil {
+		fmt.Printf("Error applying update: %v\n", err)
+		os.Exit(1)
+	}
+	
+	fmt.Printf("Successfully updated to version %s\n", updateInfo.LatestVersion)
+	fmt.Println("Please restart the application to use the new version.")
+	os.Exit(0)
 }
 
 // Helper function to get environment variables with default values

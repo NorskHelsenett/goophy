@@ -28,8 +28,6 @@ var (
 type Options struct {
 	CurrentVersion     string
 	CheckInterval      time.Duration
-	AutoDownload       bool
-	UpdateURL          string
 	GithubTokenEnvVar  string
 	DisableAutoUpdates bool
 }
@@ -52,10 +50,19 @@ func DefaultOptions(currentVersion string) Options {
 	return Options{
 		CurrentVersion:     currentVersion,
 		CheckInterval:      checkInterval,
-		AutoDownload:       true,
 		GithubTokenEnvVar:  "GITHUB_TOKEN",
 		DisableAutoUpdates: disableAutoUpdate,
 	}
+}
+
+// UpdateInfo contains information about an available update
+type UpdateInfo struct {
+	CurrentVersion string
+	LatestVersion  string
+	ReleaseURL     string
+	IsUpdateAvailable bool
+	AssetURL       string
+	AssetName      string
 }
 
 // AutoUpdater manages the application updates
@@ -64,6 +71,7 @@ type AutoUpdater struct {
 	client  *github.Client
 	ticker  *time.Ticker
 	stopCh  chan struct{}
+	lastUpdateInfo *UpdateInfo
 }
 
 // New creates a new auto updater
@@ -101,10 +109,16 @@ func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// Start begins the auto-update process
+// Start begins the auto-update check process
 func (u *AutoUpdater) Start() {
 	if u.options.DisableAutoUpdates {
-		log.Println("Auto-updates are disabled")
+		log.Println("Update checks are disabled")
+		return
+	}
+
+	// Don't check for updates if running development version
+	if u.options.CurrentVersion == "dev" {
+		log.Println("Running development version, update checks disabled")
 		return
 	}
 
@@ -126,7 +140,7 @@ func (u *AutoUpdater) Start() {
 		}
 	}()
 
-	log.Printf("Auto-updater started - current version: %s", u.options.CurrentVersion)
+	log.Printf("Update checker started - current version: %s", u.options.CurrentVersion)
 }
 
 // Stop stops the auto-updater
@@ -134,51 +148,106 @@ func (u *AutoUpdater) Stop() {
 	close(u.stopCh)
 }
 
-// checkForUpdate checks for new updates and applies them if available
+// checkForUpdate checks for new updates and notifies if available
 func (u *AutoUpdater) checkForUpdate() {
 	log.Println("Checking for updates...")
 
-	latestRelease, err := u.getLatestRelease()
+	// Don't check for updates if running development version
+	if u.options.CurrentVersion == "dev" {
+		log.Println("Running development version, skipping update check")
+		return
+	}
+
+	updateInfo, err := u.CheckForUpdates()
 	if err != nil {
 		log.Printf("Error checking for updates: %s", err)
 		return
 	}
 
-	latestVersion := strings.TrimPrefix(latestRelease.GetTagName(), "v")
-	if latestVersion == u.options.CurrentVersion {
-		log.Printf("Already running the latest version: %s", latestVersion)
+	u.lastUpdateInfo = updateInfo
+
+	if !updateInfo.IsUpdateAvailable {
+		log.Printf("Already running the latest version: %s", updateInfo.CurrentVersion)
 		return
 	}
 
-	log.Printf("New version available: %s (current: %s)", latestVersion, u.options.CurrentVersion)
-
-	if !u.options.AutoDownload {
-		log.Println("Auto-download disabled, skipping update")
-		return
-	}
-
-	asset, err := u.findAssetForCurrentPlatform(latestRelease)
-	if err != nil {
-		log.Printf("Error finding asset for current platform: %s", err)
-		return
-	}
-
-	err = u.downloadAndApplyUpdate(asset.GetBrowserDownloadURL(), asset.GetName())
-	if err != nil {
-		log.Printf("Error applying update: %s", err)
-		return
-	}
-
-	log.Printf("Successfully updated to version %s", latestVersion)
+	log.Printf("New version available: %s (current: %s)", updateInfo.LatestVersion, updateInfo.CurrentVersion)
+	log.Printf("Run 'goophy update' to upgrade to the latest version")
 }
 
-// getLatestRelease gets the latest release from GitHub
-func (u *AutoUpdater) getLatestRelease() (*github.RepositoryRelease, error) {
+// CheckForUpdates checks if a new update is available
+func (u *AutoUpdater) CheckForUpdates() (*UpdateInfo, error) {
+	// Skip update check for dev version
+	if u.options.CurrentVersion == "dev" {
+		return &UpdateInfo{
+			CurrentVersion: u.options.CurrentVersion,
+			IsUpdateAvailable: false,
+		}, nil
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	release, _, err := u.client.Repositories.GetLatestRelease(ctx, githubOwner, githubRepo)
-	return release, err
+	if err != nil {
+		return nil, err
+	}
+
+	latestVersion := strings.TrimPrefix(release.GetTagName(), "v")
+	isUpdateAvailable := latestVersion != u.options.CurrentVersion
+
+	updateInfo := &UpdateInfo{
+		CurrentVersion: u.options.CurrentVersion,
+		LatestVersion: latestVersion,
+		ReleaseURL: release.GetHTMLURL(),
+		IsUpdateAvailable: isUpdateAvailable,
+	}
+
+	if isUpdateAvailable {
+		asset, err := u.findAssetForCurrentPlatform(release)
+		if err != nil {
+			return updateInfo, err
+		}
+		
+		updateInfo.AssetURL = asset.GetBrowserDownloadURL()
+		updateInfo.AssetName = asset.GetName()
+		
+		log.Printf("Found matching asset: %s for %s/%s", 
+			asset.GetName(), runtime.GOOS, runtime.GOARCH)
+	}
+
+	return updateInfo, nil
+}
+
+// ApplyUpdate downloads and applies an update
+func (u *AutoUpdater) ApplyUpdate() error {
+	// Don't update if running dev version
+	if u.options.CurrentVersion == "dev" {
+		return fmt.Errorf("cannot update development version")
+	}
+
+	// Check for updates if we haven't already
+	var updateInfo *UpdateInfo
+	var err error
+	
+	if u.lastUpdateInfo != nil && u.lastUpdateInfo.IsUpdateAvailable {
+		updateInfo = u.lastUpdateInfo
+	} else {
+		updateInfo, err = u.CheckForUpdates()
+		if err != nil {
+			return fmt.Errorf("failed to check for updates: %w", err)
+		}
+	}
+
+	if !updateInfo.IsUpdateAvailable {
+		return fmt.Errorf("already running the latest version: %s", updateInfo.CurrentVersion)
+	}
+
+	if updateInfo.AssetURL == "" || updateInfo.AssetName == "" {
+		return fmt.Errorf("no compatible update found for this platform")
+	}
+
+	return u.downloadAndApplyUpdate(updateInfo.AssetURL, updateInfo.AssetName)
 }
 
 // findAssetForCurrentPlatform finds the correct binary for the current platform
