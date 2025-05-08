@@ -6,8 +6,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/jonasbg/goophy/internal/proxy"
-	"github.com/jonasbg/goophy/internal/updater"
+	"github.com/NorskHelsenett/goophy/internal/proxy"
+	"github.com/NorskHelsenett/goophy/internal/updater"
 )
 
 // Set by GoReleaser via ldflags: -X main.version=...

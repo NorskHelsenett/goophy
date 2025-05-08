@@ -1,4 +1,4 @@
-module github.com/jonasbg/goophy
+module github.com/NorskHelsenett/goophy
 
 go 1.23.0
 

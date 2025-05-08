@@ -16,11 +16,11 @@ import (
 
 	"github.com/google/go-github/v50/github"
 	"github.com/inconshreveable/go-update"
-	"github.com/jonasbg/goophy/internal/archive"
+	"github.com/NorskHelsenett/goophy/internal/archive"
 )
 
 var (
-	githubOwner = "jonasbg" // GitHub username/organization
+	githubOwner = "NorskHelsenett" // GitHub username/organization
 	githubRepo  = "goophy"  // GitHub repository name
 )
 
