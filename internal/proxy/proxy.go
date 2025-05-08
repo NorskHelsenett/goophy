@@ -11,6 +11,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // OllamaProxy represents a proxy server for Ollama API
@@ -511,4 +512,54 @@ func addDefaultTagToModel(modelName string) string {
 	}
 
 	return modelName
+}
+
+// PingEndpoint checks if the Ollama endpoint is accessible by making a request to /tags
+// Returns nil if successful, error otherwise
+func PingEndpoint(targetURL string, apiKey string) error {
+	// Add http:// prefix if no protocol is specified
+	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
+		targetURL = "http://" + targetURL
+	}
+
+	// Parse the target URL
+	target, err := url.Parse(targetURL)
+	if err != nil {
+		return fmt.Errorf("invalid target URL: %v", err)
+	}
+
+	// Create a client with timeout
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Build the tags endpoint URL
+	tagsURL := fmt.Sprintf("%s://%s/api/tags", target.Scheme, target.Host)
+
+	// Create the request
+	req, err := http.NewRequest("GET", tagsURL, nil)
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+
+	// Add the Authorization header if API key is set
+	if apiKey != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+	}
+
+	// Make the request
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error connecting to Ollama endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check the status code
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("error response from Ollama endpoint (status %d): %s", 
+			resp.StatusCode, string(bodyBytes))
+	}
+
+	return nil
 }
