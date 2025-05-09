@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/NorskHelsenett/goophy/internal/proxy"
 	"github.com/NorskHelsenett/goophy/internal/updater"
@@ -19,22 +20,22 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "Options:\n")
 	fmt.Fprintf(os.Stderr, "  -h, --help     Show this help message and exit\n")
 	fmt.Fprintf(os.Stderr, "  -v, --version  Print the version and exit\n\n")
-	
+
 	fmt.Fprintf(os.Stderr, "Commands:\n")
 	fmt.Fprintf(os.Stderr, "  serve          Start the Ollama proxy server\n")
 	fmt.Fprintf(os.Stderr, "  update         Check for and apply available updates\n\n")
-	
+
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
 	fmt.Fprintf(os.Stderr, "  OLLAMA_ENDPOINT  Target Ollama API endpoint (default: http://localhost:11434)\n")
 	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n\n")
-	
+
 	fmt.Fprintf(os.Stderr, "Description:\n")
 	fmt.Fprintf(os.Stderr, "  Goophy is a reverse proxy for Ollama API that provides additional features:\n")
 	fmt.Fprintf(os.Stderr, "   - Automatic updates\n")
 	fmt.Fprintf(os.Stderr, "   - API key authentication\n")
 	fmt.Fprintf(os.Stderr, "   - CORS support for browser applications\n\n")
-	
+
 	fmt.Fprintf(os.Stderr, "Example usage:\n")
 	fmt.Fprintf(os.Stderr, "  OLLAMA_ENDPOINT=http://my-ollama-server:11434 API_KEY=secret123 goophy serve\n\n")
 }
@@ -44,12 +45,12 @@ func printServeHelp() {
 	fmt.Fprintf(os.Stderr, "Usage: goophy serve [options]\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
 	fmt.Fprintf(os.Stderr, "  -h, --help     Show this help message and exit\n\n")
-	
+
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
 	fmt.Fprintf(os.Stderr, "  OLLAMA_ENDPOINT  Target Ollama API endpoint (default: http://localhost:11434)\n")
 	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n\n")
-	
+
 	fmt.Fprintf(os.Stderr, "Example usage:\n")
 	fmt.Fprintf(os.Stderr, "  OLLAMA_ENDPOINT=http://my-ollama-server:11434 API_KEY=secret123 goophy serve\n\n")
 }
@@ -106,10 +107,10 @@ func serveCommand(args []string) {
 	serveFlags := flag.NewFlagSet("serve", flag.ExitOnError)
 	showHelp := serveFlags.Bool("help", false, "Show help message for serve command")
 	serveFlags.BoolVar(showHelp, "h", false, "Show help message for serve command (shorthand)")
-	
+
 	// Set custom usage function
 	serveFlags.Usage = printServeHelp
-	
+
 	// Parse serve command flags
 	err := serveFlags.Parse(args)
 	if err != nil {
@@ -132,7 +133,7 @@ func serveCommand(args []string) {
 	fmt.Println("Starting with configuration:")
 	fmt.Printf("  PORT:             %s\n", port)
 	fmt.Printf("  OLLAMA_ENDPOINT:  %s\n", targetURL)
-	
+
 	// Mask API key if present
 	apiKeyDisplay := "Not configured"
 	if apiKey != "" {
@@ -197,31 +198,31 @@ func updateCommand(args []string) {
 	// Create updater
 	fmt.Printf("Current version: %s\n", version)
 	fmt.Println("Checking for updates...")
-	
+
 	autoUpdater := updater.New(updater.DefaultOptions(version))
-	
+
 	// Check for updates first
 	updateInfo, err := autoUpdater.CheckForUpdates()
 	if err != nil {
 		fmt.Printf("Error checking for updates: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	if !updateInfo.IsUpdateAvailable {
 		fmt.Printf("Already running the latest version: %s\n", updateInfo.CurrentVersion)
 		os.Exit(0)
 	}
-	
+
 	fmt.Printf("New version available: %s\n", updateInfo.LatestVersion)
 	fmt.Println("Downloading and applying update...")
-	
+
 	// Apply update
 	err = autoUpdater.ApplyUpdate()
 	if err != nil {
 		fmt.Printf("Error applying update: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	fmt.Printf("Successfully updated to version %s\n", updateInfo.LatestVersion)
 	fmt.Println("Please restart the application to use the new version.")
 	os.Exit(0)
@@ -229,7 +230,7 @@ func updateCommand(args []string) {
 
 // Helper function to get environment variables with default values
 func getEnv(key, defaultValue string) string {
-	value := os.Getenv(key)
+	value := strings.Trim(os.Getenv(key), `"'`)
 	if value == "" {
 		return defaultValue
 	}

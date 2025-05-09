@@ -32,5 +32,6 @@ ENV DISABLE_AUTO_UPDATE=true
 # Expose the port
 EXPOSE 22434
 
-# Run the application
-CMD ["/app/goophy"]
+# Run the application - use ENTRYPOINT with CMD to allow passing arguments
+ENTRYPOINT ["/app/goophy"]
+CMD []

@@ -14,14 +14,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NorskHelsenett/goophy/internal/archive"
 	"github.com/google/go-github/v50/github"
 	"github.com/inconshreveable/go-update"
-	"github.com/NorskHelsenett/goophy/internal/archive"
 )
 
 var (
 	githubOwner = "NorskHelsenett" // GitHub username/organization
-	githubRepo  = "goophy"  // GitHub repository name
+	githubRepo  = "goophy"         // GitHub repository name
 )
 
 // Options defines options for the auto-updater
@@ -57,20 +57,20 @@ func DefaultOptions(currentVersion string) Options {
 
 // UpdateInfo contains information about an available update
 type UpdateInfo struct {
-	CurrentVersion string
-	LatestVersion  string
-	ReleaseURL     string
+	CurrentVersion    string
+	LatestVersion     string
+	ReleaseURL        string
 	IsUpdateAvailable bool
-	AssetURL       string
-	AssetName      string
+	AssetURL          string
+	AssetName         string
 }
 
 // AutoUpdater manages the application updates
 type AutoUpdater struct {
-	options Options
-	client  *github.Client
-	ticker  *time.Ticker
-	stopCh  chan struct{}
+	options        Options
+	client         *github.Client
+	ticker         *time.Ticker
+	stopCh         chan struct{}
 	lastUpdateInfo *UpdateInfo
 }
 
@@ -180,7 +180,7 @@ func (u *AutoUpdater) CheckForUpdates() (*UpdateInfo, error) {
 	// Skip update check for dev version
 	if u.options.CurrentVersion == "dev" {
 		return &UpdateInfo{
-			CurrentVersion: u.options.CurrentVersion,
+			CurrentVersion:    u.options.CurrentVersion,
 			IsUpdateAvailable: false,
 		}, nil
 	}
@@ -197,9 +197,9 @@ func (u *AutoUpdater) CheckForUpdates() (*UpdateInfo, error) {
 	isUpdateAvailable := latestVersion != u.options.CurrentVersion
 
 	updateInfo := &UpdateInfo{
-		CurrentVersion: u.options.CurrentVersion,
-		LatestVersion: latestVersion,
-		ReleaseURL: release.GetHTMLURL(),
+		CurrentVersion:    u.options.CurrentVersion,
+		LatestVersion:     latestVersion,
+		ReleaseURL:        release.GetHTMLURL(),
 		IsUpdateAvailable: isUpdateAvailable,
 	}
 
@@ -208,11 +208,11 @@ func (u *AutoUpdater) CheckForUpdates() (*UpdateInfo, error) {
 		if err != nil {
 			return updateInfo, err
 		}
-		
+
 		updateInfo.AssetURL = asset.GetBrowserDownloadURL()
 		updateInfo.AssetName = asset.GetName()
-		
-		log.Printf("Found matching asset: %s for %s/%s", 
+
+		log.Printf("Found matching asset: %s for %s/%s",
 			asset.GetName(), runtime.GOOS, runtime.GOARCH)
 	}
 
@@ -229,7 +229,7 @@ func (u *AutoUpdater) ApplyUpdate() error {
 	// Check for updates if we haven't already
 	var updateInfo *UpdateInfo
 	var err error
-	
+
 	if u.lastUpdateInfo != nil && u.lastUpdateInfo.IsUpdateAvailable {
 		updateInfo = u.lastUpdateInfo
 	} else {
@@ -267,7 +267,7 @@ func (u *AutoUpdater) findAssetForCurrentPlatform(release *github.RepositoryRele
 		nameLower := strings.ToLower(name)
 		osLower := strings.ToLower(os)
 		archLower := strings.ToLower(arch)
-		
+
 		// Check if the asset name contains both the OS and architecture
 		if strings.Contains(nameLower, osLower) && strings.Contains(nameLower, archLower) {
 			return asset, nil
