@@ -20,11 +20,34 @@ The proxy uses the following environment variables:
 
 ## Usage
 
+### Get Started
+
+#### 1. Download the binaries from releases
+
+[https://github.com/NorskHelsenett/goophy/releases](https://github.com/NorskHelsenett/goophy/releases)
+
+#### 2. Docker
+
+Create a `.env` file with the following content:
+
+```.env
+OLLAMA_ENDPOINT="https://openwebui.com/ollama"
+API_KEY="sk-your-key-from-OWUI"
+```
+Then run the following container:
+
+```bash
+ docker run --rm --env-file .env -p 22434:22434 ghcr.io/norskhelsenett/goophy serve
+````
+
 ### Building and Running
 
 ```bash
 # Build the application
 go build -o goophy cmd/goophy/main.go
+
+# Or with custom version
+go build -ldflags="-X main.version=0.1.3" -o goophy ./cmd/goophy/
 
 # Run the proxy with default settings
 ./goophy
