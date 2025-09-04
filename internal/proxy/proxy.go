@@ -60,7 +60,6 @@ func (p *OllamaProxy) Start() error {
 	// Customize the director function to add our authorization header and fix path issues
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
-		// Store original path before the original director modifies it
 		originalPath := req.URL.Path
 
 		// Call the original director
@@ -99,16 +98,8 @@ func (p *OllamaProxy) Start() error {
 		// Clean up any double slashes that might have been created
 		req.URL.Path = strings.Replace(req.URL.Path, "//", "/", -1)
 
-		// Log the final forwarded URL
-		// Only log HEAD requests when Verbose is true
-		if req.Method != http.MethodHead || Verbose {
-			log.Printf("%s %s -> %s://%s%s",
-				req.Method,
-				originalPath,
-				p.targetURL.Scheme,
-				p.targetURL.Host,
-				req.URL.Path)
-		}
+		// Log the original path (removed per-request log to avoid duplicates)
+		_ = originalPath
 	}
 
 	// Create a custom transport that preserves the original request and modifies specific responses
@@ -256,9 +247,19 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 
-	// Only log HEAD responses when Verbose is true
+	// Single unified log (suppresses HEAD unless Verbose)
 	if req.Method != http.MethodHead || Verbose {
-		log.Printf("%s %s -> %d", req.Method, req.URL.Path, resp.StatusCode)
+		orig := t.originalPath
+		if orig == "" {
+			orig = req.URL.Path
+		}
+		log.Printf("%s %s -> %s://%s%s -> %d",
+			req.Method,
+			orig,
+			req.URL.Scheme,
+			req.URL.Host,
+			req.URL.Path,
+			resp.StatusCode)
 	}
 
 	// Handle case where model doesn't exist (for /api/run and /api/generate endpoints)
