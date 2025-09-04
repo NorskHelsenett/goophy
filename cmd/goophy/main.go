@@ -127,6 +127,8 @@ func serveCommand(args []string) {
 	serveFlags := flag.NewFlagSet("serve", flag.ExitOnError)
 	showHelp := serveFlags.Bool("help", false, "Show help message for serve command")
 	serveFlags.BoolVar(showHelp, "h", false, "Show help message for serve command (shorthand)")
+	verboseFlag := serveFlags.Bool("verbose", false, "Enable verbose logging")
+	serveFlags.BoolVar(verboseFlag, "V", false, "Enable verbose logging (shorthand)")
 
 	// Set custom usage function
 	serveFlags.Usage = printServeHelp
@@ -142,6 +144,12 @@ func serveCommand(args []string) {
 	if *showHelp {
 		printServeHelp()
 		os.Exit(0)
+	}
+
+	// Set verbose mode in proxy package
+	if *verboseFlag {
+		proxy.Verbose = true
+		log.Printf("Verbose logging enabled")
 	}
 
 	// Get environment variables

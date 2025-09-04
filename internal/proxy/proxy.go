@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+var Verbose bool
+
 // OllamaProxy represents a proxy server for Ollama API
 type OllamaProxy struct {
 	port      string
@@ -133,11 +135,15 @@ func (p *OllamaProxy) Start() error {
 				if err == nil {
 					processed, modified := processModelBody(r.URL.Path, bodyBytes)
 					if modified {
-						log.Printf("Final forwarded body for %s: %s", r.URL.Path, string(processed))
+						if Verbose {
+							log.Printf("Final forwarded body for %s: %s", r.URL.Path, string(processed))
+						}
+						// Always forward the processed body if it was modified
 						r.Body = io.NopCloser(bytes.NewReader(processed))
 						r.ContentLength = int64(len(processed))
 						r.Header.Set("Content-Length", fmt.Sprintf("%d", len(processed)))
 					} else {
+						// Unmodified, restore original
 						r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 					}
 				}
@@ -394,38 +400,6 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// transformPsResponse transforms the process response from the nested map format to the expected format
-func transformPsResponse(data []byte) ([]byte, error) {
-	// Parse the original response
-	var originalResponse map[string]interface{}
-	if err := json.Unmarshal(data, &originalResponse); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal original response: %w", err)
-	}
-
-	// Extract all models from all servers and combine them
-	var allModels []interface{}
-	for _, serverData := range originalResponse {
-		if serverDataMap, ok := serverData.(map[string]interface{}); ok {
-			if models, ok := serverDataMap["models"].([]interface{}); ok {
-				allModels = append(allModels, models...)
-			}
-		}
-	}
-
-	// Create the expected response format
-	expectedResponse := map[string]interface{}{
-		"models": allModels,
-	}
-
-	// Marshal back to JSON
-	transformedData, err := json.Marshal(expectedResponse)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal transformed response: %w", err)
-	}
-
-	return transformedData, nil
-}
-
 // addDefaultTagToModel adds ":latest" to model names that don't have a tag
 func addDefaultTagToModel(modelName string) string {
 	if modelName == "" {
@@ -459,7 +433,9 @@ func processModelBody(path string, body []byte) ([]byte, bool) {
 			updated := addDefaultTagToModel(v)
 			if updated != v {
 				bodyJSON[field] = updated
-				log.Printf("Updated model in body (%s field): %s -> %s", field, v, updated)
+				if Verbose {
+					log.Printf("Updated model in body (%s field): %s -> %s", field, v, updated)
+				}
 				modified = true
 			}
 		}
@@ -476,16 +452,22 @@ func processModelBody(path string, body []byte) ([]byte, bool) {
 		case hasName && !hasModel:
 			bodyJSON["model"] = nameVal
 			modified = true
-			log.Printf("Added missing 'model' field for /api/show using name=%s", nameVal)
+			if Verbose {
+				log.Printf("Added missing 'model' field for /api/show using name=%s", nameVal)
+			}
 		case hasModel && !hasName:
 			bodyJSON["name"] = modelVal
 			modified = true
-			log.Printf("Added missing 'name' field for /api/show using model=%s", modelVal)
+			if Verbose {
+				log.Printf("Added missing 'name' field for /api/show using model=%s", modelVal)
+			}
 		case hasName && hasModel && nameVal != modelVal:
 			// Prefer name, overwrite model to match
 			bodyJSON["model"] = nameVal
 			modified = true
-			log.Printf("Normalized differing name/model for /api/show: name=%s model=%s", nameVal, modelVal)
+			if Verbose {
+				log.Printf("Normalized differing name/model for /api/show: name=%s model=%s", nameVal, modelVal)
+			}
 		}
 	}
 
