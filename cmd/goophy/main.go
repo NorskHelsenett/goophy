@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/NorskHelsenett/goophy/internal/env"
 	"github.com/NorskHelsenett/goophy/internal/proxy"
 	"github.com/NorskHelsenett/goophy/internal/updater"
 )
@@ -18,8 +19,9 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "Goophy - Ollama API Proxy, version %s\n\n", version)
 	fmt.Fprintf(os.Stderr, "Usage: goophy [options] [command]\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
-	fmt.Fprintf(os.Stderr, "  -h, --help     Show this help message and exit\n")
-	fmt.Fprintf(os.Stderr, "  -v, --version  Print the version and exit\n\n")
+	fmt.Fprintf(os.Stderr, "  -h, --help            Show this help message and exit\n")
+	fmt.Fprintf(os.Stderr, "  -v, --version         Print the version and exit\n")
+	fmt.Fprintf(os.Stderr, "  --env-file string     Path to an env file to load configuration from\n\n")
 
 	fmt.Fprintf(os.Stderr, "Commands:\n")
 	fmt.Fprintf(os.Stderr, "  serve          Start the Ollama proxy server\n")
@@ -28,7 +30,10 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
 	fmt.Fprintf(os.Stderr, "  OLLAMA_ENDPOINT  Target Ollama API endpoint (default: http://localhost:11434)\n")
-	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n\n")
+	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n")
+	fmt.Fprintf(os.Stderr, "  \n")
+	fmt.Fprintf(os.Stderr, "  Environment variables can also be set in a .env file in the current directory\n")
+	fmt.Fprintf(os.Stderr, "  or specified using the --env-file flag.\n\n")
 
 	fmt.Fprintf(os.Stderr, "Description:\n")
 	fmt.Fprintf(os.Stderr, "  Goophy is a reverse proxy for Ollama API that provides additional features:\n")
@@ -44,12 +49,16 @@ func printServeHelp() {
 	fmt.Fprintf(os.Stderr, "Goophy - Ollama API Proxy, version %s\n\n", version)
 	fmt.Fprintf(os.Stderr, "Usage: goophy serve [options]\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
-	fmt.Fprintf(os.Stderr, "  -h, --help     Show this help message and exit\n\n")
+	fmt.Fprintf(os.Stderr, "  -h, --help            Show this help message and exit\n")
+	fmt.Fprintf(os.Stderr, "  --env-file string     Path to an env file to load configuration from\n\n")
 
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
 	fmt.Fprintf(os.Stderr, "  OLLAMA_ENDPOINT  Target Ollama API endpoint (default: http://localhost:11434)\n")
-	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n\n")
+	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n")
+	fmt.Fprintf(os.Stderr, "  \n")
+	fmt.Fprintf(os.Stderr, "  Environment variables can also be set in a .env file in the current directory\n")
+	fmt.Fprintf(os.Stderr, "  or specified using the --env-file flag.\n\n")
 
 	fmt.Fprintf(os.Stderr, "Example usage:\n")
 	fmt.Fprintf(os.Stderr, "  OLLAMA_ENDPOINT=http://my-ollama-server:11434 API_KEY=secret123 goophy serve\n\n")
@@ -59,7 +68,8 @@ func printUpdateHelp() {
 	fmt.Fprintf(os.Stderr, "Goophy - Ollama API Proxy, version %s\n\n", version)
 	fmt.Fprintf(os.Stderr, "Usage: goophy update [options]\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
-	fmt.Fprintf(os.Stderr, "  -h, --help     Show this help message and exit\n\n")
+	fmt.Fprintf(os.Stderr, "  -h, --help            Show this help message and exit\n")
+	fmt.Fprintf(os.Stderr, "  --env-file string     Path to an env file to load configuration from\n\n")
 
 	fmt.Fprintf(os.Stderr, "Description:\n")
 	fmt.Fprintf(os.Stderr, "  Checks for and applies available updates for Goophy.\n")
@@ -76,6 +86,10 @@ func main() {
 	globalFlags.BoolVar(showVersion, "v", false, "Print the version and exit (shorthand)")
 	showHelp := globalFlags.Bool("help", false, "Show help message")
 	globalFlags.BoolVar(showHelp, "h", false, "Show help message (shorthand)")
+	// Note: We handle --env-file separately since it needs to be processed before commands
+
+	// Try to load .env from current directory by default (before parsing any flags)
+	env.TryLoadDefaultEnvFile()
 
 	// Check for no args or help flag at top level
 	if len(os.Args) < 2 || os.Args[1] == "-h" || os.Args[1] == "--help" {
@@ -87,6 +101,17 @@ func main() {
 	if os.Args[1] == "-v" || os.Args[1] == "--version" {
 		fmt.Println("goophy version:", version)
 		os.Exit(0)
+	}
+	
+	// Check for env-file flag at top level
+	for i, arg := range os.Args {
+		if (arg == "--env-file") && i+1 < len(os.Args) {
+			if err := env.LoadEnvFile(os.Args[i+1]); err != nil {
+				fmt.Fprintf(os.Stderr, "Error loading env file: %v\n", err)
+				os.Exit(1)
+			}
+			break
+		}
 	}
 
 	// Parse command
@@ -107,6 +132,7 @@ func serveCommand(args []string) {
 	serveFlags := flag.NewFlagSet("serve", flag.ExitOnError)
 	showHelp := serveFlags.Bool("help", false, "Show help message for serve command")
 	serveFlags.BoolVar(showHelp, "h", false, "Show help message for serve command (shorthand)")
+	envFile := serveFlags.String("env-file", "", "Path to an env file to load configuration from")
 
 	// Set custom usage function
 	serveFlags.Usage = printServeHelp
@@ -122,6 +148,14 @@ func serveCommand(args []string) {
 	if *showHelp {
 		printServeHelp()
 		os.Exit(0)
+	}
+
+	// Load environment file if specified
+	if *envFile != "" {
+		if err := env.LoadEnvFile(*envFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading env file: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	// Get environment variables
@@ -171,6 +205,7 @@ func updateCommand(args []string) {
 	updateFlags := flag.NewFlagSet("update", flag.ExitOnError)
 	showHelp := updateFlags.Bool("help", false, "Show help message for update command")
 	updateFlags.BoolVar(showHelp, "h", false, "Show help message for update command (shorthand)")
+	envFile := updateFlags.String("env-file", "", "Path to an env file to load configuration from")
 
 	// Set custom usage function
 	updateFlags.Usage = printUpdateHelp
@@ -186,6 +221,14 @@ func updateCommand(args []string) {
 	if *showHelp {
 		printUpdateHelp()
 		os.Exit(0)
+	}
+	
+	// Load environment file if specified
+	if *envFile != "" {
+		if err := env.LoadEnvFile(*envFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading env file: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	// Don't allow updates for dev version
@@ -228,11 +271,3 @@ func updateCommand(args []string) {
 	os.Exit(0)
 }
 
-// Helper function to get environment variables with default values
-func getEnv(key, defaultValue string) string {
-	value := strings.Trim(os.Getenv(key), `"'`)
-	if value == "" {
-		return defaultValue
-	}
-	return value
-}
