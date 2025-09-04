@@ -18,6 +18,14 @@ The proxy uses the following environment variables:
 - `DISABLE_AUTO_UPDATE`: Disable auto update for the goophy.
 - `UPDATE_CHECK_INTERVAL`: How often to check for updates (default: 24h)
 
+Environment variables can be provided in multiple ways:
+
+1. Directly in the command line: `PORT=22434 OLLAMA_ENDPOINT=http://localhost:11434 goophy serve`
+2. From a `.env` file in the current directory (automatically loaded)
+3. From a custom env file specified with the `--env-file` flag: `goophy --env-file my-config.env serve`
+
+See `example.env` for a sample configuration file format.
+
 ## Usage
 
 ### Get Started
@@ -50,10 +58,17 @@ go build -o goophy cmd/goophy/main.go
 go build -ldflags="-X main.version=0.1.3" -o goophy ./cmd/goophy/
 
 # Run the proxy with default settings
-./goophy
+./goophy serve
 
-# Run with custom settings
-PORT=22434 OLLAMA_ENDPOINT=https://my-ollama-server.example.com API_KEY=my-secret-key ./goophy
+# Run with custom settings using environment variables
+PORT=22434 OLLAMA_ENDPOINT=https://my-ollama-server.example.com API_KEY=my-secret-key ./goophy serve
+
+# Run with settings from a config file
+./goophy --env-file my-config.env serve
+
+# A .env file in the current directory is automatically loaded
+# echo "API_KEY=my-secret-key" > .env
+# ./goophy serve
 ```
 
 ### Docker
