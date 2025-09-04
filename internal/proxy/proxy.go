@@ -131,63 +131,13 @@ func (p *OllamaProxy) Start() error {
 				r.Body.Close()
 
 				if err == nil {
-					// Parse JSON to find and update model field
-					var bodyJSON map[string]interface{}
-					if err := json.Unmarshal(bodyBytes, &bodyJSON); err == nil {
-						// Track if we modified anything
-						modified := false
-
-						// Check for "name" field
-						if modelName, ok := bodyJSON["name"].(string); ok {
-							updatedModelName := addDefaultTagToModel(modelName)
-							if modelName != updatedModelName {
-								bodyJSON["name"] = updatedModelName
-								log.Printf("Updated model in body (name field): %s -> %s", modelName, updatedModelName)
-								modified = true
-							}
-						}
-
-						// Check for "model" field
-						if modelName, ok := bodyJSON["model"].(string); ok {
-							updatedModelName := addDefaultTagToModel(modelName)
-							if modelName != updatedModelName {
-								bodyJSON["model"] = updatedModelName
-								log.Printf("Updated model in body (model field): %s -> %s", modelName, updatedModelName)
-								modified = true
-							}
-						}
-
-						// Special handling for /api/show endpoint - Ollama expects "name" instead of "model"
-						if strings.HasSuffix(r.URL.Path, "/api/show") {
-							// Check if we have a model field but no name field
-							if modelName, ok := bodyJSON["model"].(string); ok {
-								if _, hasName := bodyJSON["name"]; !hasName {
-									bodyJSON["name"] = modelName
-									delete(bodyJSON, "model") // Remove the model field to avoid confusion
-									log.Printf("Transformed field for /api/show: 'model' -> 'name': %s", modelName)
-									modified = true
-								}
-							}
-						}
-
-						// Restore the body - use modified JSON if we made changes, otherwise use original bytes
-						if modified {
-							modifiedBody, err := json.Marshal(bodyJSON)
-							if err == nil {
-								r.Body = io.NopCloser(bytes.NewReader(modifiedBody))
-								// Update Content-Length header to match the new body size
-								r.ContentLength = int64(len(modifiedBody))
-								r.Header.Set("Content-Length", fmt.Sprintf("%d", len(modifiedBody)))
-							} else {
-								// If marshaling fails, fall back to original bytes
-								r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-							}
-						} else {
-							// No modifications, use original bytes
-							r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-						}
+					processed, modified := processModelBody(r.URL.Path, bodyBytes)
+					if modified {
+						log.Printf("Final forwarded body for %s: %s", r.URL.Path, string(processed))
+						r.Body = io.NopCloser(bytes.NewReader(processed))
+						r.ContentLength = int64(len(processed))
+						r.Header.Set("Content-Length", fmt.Sprintf("%d", len(processed)))
 					} else {
-						// If JSON parsing failed, restore with original bytes
 						r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 					}
 				}
@@ -512,6 +462,66 @@ func addDefaultTagToModel(modelName string) string {
 	}
 
 	return modelName
+}
+
+// processModelBody parses and mutates an Ollama JSON request body.
+// It ensures model/name fields have a default :latest tag and for /api/show keeps both
+// name and model so upstream implementations that expect either will work.
+// Returns potentially modified bytes and a boolean indicating modification.
+func processModelBody(path string, body []byte) ([]byte, bool) {
+	if len(body) == 0 {
+		return body, false
+	}
+	var bodyJSON map[string]interface{}
+	if err := json.Unmarshal(body, &bodyJSON); err != nil {
+		return body, false
+	}
+	modified := false
+
+	// Helper to update a single field
+	updateField := func(field string) {
+		if v, ok := bodyJSON[field].(string); ok && v != "" {
+			updated := addDefaultTagToModel(v)
+			if updated != v {
+				bodyJSON[field] = updated
+				log.Printf("Updated model in body (%s field): %s -> %s", field, v, updated)
+				modified = true
+			}
+		}
+	}
+
+	updateField("name")
+	updateField("model")
+
+	// /api/show specific handling: ensure both name and model exist and are identical
+	if strings.HasSuffix(path, "/api/show") {
+		nameVal, hasName := bodyJSON["name"].(string)
+		modelVal, hasModel := bodyJSON["model"].(string)
+		switch {
+		case hasName && !hasModel:
+			bodyJSON["model"] = nameVal
+			modified = true
+			log.Printf("Added missing 'model' field for /api/show using name=%s", nameVal)
+		case hasModel && !hasName:
+			bodyJSON["name"] = modelVal
+			modified = true
+			log.Printf("Added missing 'name' field for /api/show using model=%s", modelVal)
+		case hasName && hasModel && nameVal != modelVal:
+			// Prefer name, overwrite model to match
+			bodyJSON["model"] = nameVal
+			modified = true
+			log.Printf("Normalized differing name/model for /api/show: name=%s model=%s", nameVal, modelVal)
+		}
+	}
+
+	if !modified {
+		return body, false
+	}
+	newBytes, err := json.Marshal(bodyJSON)
+	if err != nil {
+		return body, false
+	}
+	return newBytes, true
 }
 
 // PingEndpoint checks if the Ollama endpoint is accessible by making a request to /tags
