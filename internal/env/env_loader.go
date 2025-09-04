@@ -14,19 +14,27 @@ import (
 // Returns any error that occurred during loading custom env file only
 func LoadEnv(envFilePath string) error {
 	var err error
-	
+
 	// If a custom env file was specified, try to load it
 	if envFilePath != "" {
 		err = loadEnvFile(envFilePath, true) // Return error if this file doesn't exist
 	}
-	
+
 	// Always try to load the default .env file (but don't report errors)
 	// This will only set variables that aren't already set
 	if _, statErr := os.Stat(".env"); statErr == nil {
 		_ = loadEnvFile(".env", false)
 	}
-	
+
 	return err
+}
+
+// LoadEnvOptional wraps LoadEnv to simplify conditional loading when a path may be empty.
+// If path is empty it only attempts to load the default .env (same as calling LoadEnv("")).
+// Returns any error from loading the provided env file.
+func LoadEnvOptional(path string) error {
+	// Reuse existing logic: LoadEnv already handles empty string gracefully.
+	return LoadEnv(path)
 }
 
 // GetEnv retrieves an environment variable value with fallback to default

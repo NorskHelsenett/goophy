@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 
 	"github.com/NorskHelsenett/goophy/internal/env"
 	"github.com/NorskHelsenett/goophy/internal/proxy"
@@ -86,10 +85,7 @@ func main() {
 	globalFlags.BoolVar(showVersion, "v", false, "Print the version and exit (shorthand)")
 	showHelp := globalFlags.Bool("help", false, "Show help message")
 	globalFlags.BoolVar(showHelp, "h", false, "Show help message (shorthand)")
-	// Note: We handle --env-file separately since it needs to be processed before commands
-
-	// Try to load .env from current directory by default (before parsing any flags)
-	env.TryLoadDefaultEnvFile()
+	envFile := globalFlags.String("env-file", "", "Path to an env file to load configuration from")
 
 	// Check for no args or help flag at top level
 	if len(os.Args) < 2 || os.Args[1] == "-h" || os.Args[1] == "--help" {
@@ -102,17 +98,16 @@ func main() {
 		fmt.Println("goophy version:", version)
 		os.Exit(0)
 	}
-	
-	// Check for env-file flag at top level
+
+	// Check for env-file flag at top level and load environment
 	for i, arg := range os.Args {
 		if (arg == "--env-file") && i+1 < len(os.Args) {
-			if err := env.LoadEnvFile(os.Args[i+1]); err != nil {
-				fmt.Fprintf(os.Stderr, "Error loading env file: %v\n", err)
-				os.Exit(1)
-			}
+			*envFile = os.Args[i+1]
 			break
 		}
 	}
+
+	loadEnvFile(envFile, true)
 
 	// Parse command
 	switch os.Args[1] {
@@ -132,7 +127,6 @@ func serveCommand(args []string) {
 	serveFlags := flag.NewFlagSet("serve", flag.ExitOnError)
 	showHelp := serveFlags.Bool("help", false, "Show help message for serve command")
 	serveFlags.BoolVar(showHelp, "h", false, "Show help message for serve command (shorthand)")
-	envFile := serveFlags.String("env-file", "", "Path to an env file to load configuration from")
 
 	// Set custom usage function
 	serveFlags.Usage = printServeHelp
@@ -150,18 +144,10 @@ func serveCommand(args []string) {
 		os.Exit(0)
 	}
 
-	// Load environment file if specified
-	if *envFile != "" {
-		if err := env.LoadEnvFile(*envFile); err != nil {
-			fmt.Fprintf(os.Stderr, "Error loading env file: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
 	// Get environment variables
-	port := getEnv("PORT", "22434")
-	targetURL := getEnv("OLLAMA_ENDPOINT", "http://localhost:11434")
-	apiKey := getEnv("API_KEY", "")
+	port := env.GetEnv("PORT", "22434")
+	targetURL := env.GetEnv("OLLAMA_ENDPOINT", "http://localhost:11434")
+	apiKey := env.GetEnv("API_KEY", "")
 
 	// Display configured environment variables
 	fmt.Println("Starting with configuration:")
@@ -205,7 +191,6 @@ func updateCommand(args []string) {
 	updateFlags := flag.NewFlagSet("update", flag.ExitOnError)
 	showHelp := updateFlags.Bool("help", false, "Show help message for update command")
 	updateFlags.BoolVar(showHelp, "h", false, "Show help message for update command (shorthand)")
-	envFile := updateFlags.String("env-file", "", "Path to an env file to load configuration from")
 
 	// Set custom usage function
 	updateFlags.Usage = printUpdateHelp
@@ -221,14 +206,6 @@ func updateCommand(args []string) {
 	if *showHelp {
 		printUpdateHelp()
 		os.Exit(0)
-	}
-	
-	// Load environment file if specified
-	if *envFile != "" {
-		if err := env.LoadEnvFile(*envFile); err != nil {
-			fmt.Fprintf(os.Stderr, "Error loading env file: %v\n", err)
-			os.Exit(1)
-		}
 	}
 
 	// Don't allow updates for dev version
@@ -271,3 +248,9 @@ func updateCommand(args []string) {
 	os.Exit(0)
 }
 
+func loadEnvFile(envFile *string, reportError bool) {
+	if err := env.LoadEnvOptional(*envFile); err != nil && reportError {
+		fmt.Fprintf(os.Stderr, "Error loading env file: %v\n", err)
+		os.Exit(1)
+	}
+}
