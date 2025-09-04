@@ -100,12 +100,15 @@ func (p *OllamaProxy) Start() error {
 		req.URL.Path = strings.Replace(req.URL.Path, "//", "/", -1)
 
 		// Log the final forwarded URL
-		log.Printf("%s %s -> %s://%s%s",
-			req.Method,
-			originalPath,
-			p.targetURL.Scheme,
-			p.targetURL.Host,
-			req.URL.Path)
+		// Only log HEAD requests when Verbose is true
+		if req.Method != http.MethodHead || Verbose {
+			log.Printf("%s %s -> %s://%s%s",
+				req.Method,
+				originalPath,
+				p.targetURL.Scheme,
+				p.targetURL.Host,
+				req.URL.Path)
+		}
 	}
 
 	// Create a custom transport that preserves the original request and modifies specific responses
@@ -253,8 +256,10 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 
-	// Log the response status
-	log.Printf("%s %s -> %d", req.Method, req.URL.Path, resp.StatusCode)
+	// Only log HEAD responses when Verbose is true
+	if req.Method != http.MethodHead || Verbose {
+		log.Printf("%s %s -> %d", req.Method, req.URL.Path, resp.StatusCode)
+	}
 
 	// Handle case where model doesn't exist (for /api/run and /api/generate endpoints)
 	if resp.StatusCode == http.StatusBadRequest &&
