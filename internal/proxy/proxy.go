@@ -194,12 +194,12 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if len(via) > 0 {
 				log.Printf("Following redirect: %s -> %s", via[len(via)-1].URL.String(), req.URL.String())
 			}
-			
+
 			// Stop after maxRedirects
 			if len(via) >= t.maxRedirects {
 				return fmt.Errorf("stopped after %d redirects", t.maxRedirects)
 			}
-			
+
 			// Copy headers from the original request
 			for key, vals := range via[0].Header {
 				// Skip headers that are set by the Go stdlib
@@ -208,7 +208,7 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				}
 				req.Header[key] = vals
 			}
-			
+
 			return nil
 		},
 	}
@@ -234,7 +234,7 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, fmt.Errorf("error reading request body: %w", err)
 		}
 		req.Body.Close()
-		
+
 		// Replace the body for the current request
 		newReq.Body = io.NopCloser(bytes.NewReader(originalBody))
 		newReq.ContentLength = int64(len(originalBody))
@@ -251,10 +251,10 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	log.Printf("%s %s -> %d", req.Method, req.URL.Path, resp.StatusCode)
 
 	// Handle case where model doesn't exist (for /api/run and /api/generate endpoints)
-	if resp.StatusCode == http.StatusBadRequest && 
-	   (strings.HasSuffix(req.URL.Path, "/api/run") || strings.HasSuffix(req.URL.Path, "/api/generate")) && 
-	   originalBody != nil {
-		
+	if resp.StatusCode == http.StatusBadRequest &&
+		(strings.HasSuffix(req.URL.Path, "/api/run") || strings.HasSuffix(req.URL.Path, "/api/generate")) &&
+		originalBody != nil {
+
 		// Read the error response body
 		respBody, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -264,15 +264,15 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 			return resp, nil
 		}
-		
+
 		// Check if the error is about a missing model
 		var errorResp map[string]interface{}
 		if err := json.Unmarshal(respBody, &errorResp); err == nil {
-			if errMsg, ok := errorResp["error"].(string); ok && 
-			   (strings.Contains(errMsg, "model not found") || 
-				strings.Contains(errMsg, "no model") || 
-				strings.Contains(errMsg, "model") && strings.Contains(errMsg, "not found")) {
-				
+			if errMsg, ok := errorResp["error"].(string); ok &&
+				(strings.Contains(errMsg, "model not found") ||
+					strings.Contains(errMsg, "no model") ||
+					strings.Contains(errMsg, "model") && strings.Contains(errMsg, "not found")) {
+
 				// Extract model name from original request
 				var bodyJSON map[string]interface{}
 				modelName := ""
@@ -284,19 +284,19 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 						modelName = name
 					}
 				}
-				
+
 				if modelName != "" {
 					log.Printf("Model '%s' not found. Attempting to pull the model first...", modelName)
-					
+
 					// Construct the pull request URL
 					pullURL := fmt.Sprintf("%s://%s/api/pull", req.URL.Scheme, req.URL.Host)
-					
+
 					// Create pull request body
 					pullBody := map[string]interface{}{
 						"name": modelName,
 					}
 					pullJSON, _ := json.Marshal(pullBody)
-					
+
 					// Create the pull request
 					pullReq, err := http.NewRequest("POST", pullURL, bytes.NewReader(pullJSON))
 					if err != nil {
@@ -305,15 +305,15 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 						resp.Body = io.NopCloser(bytes.NewReader(respBody))
 						return resp, nil
 					}
-					
+
 					// Copy relevant headers
 					pullReq.Header.Set("Content-Type", "application/json")
 					if auth := req.Header.Get("Authorization"); auth != "" {
 						pullReq.Header.Set("Authorization", auth)
 					}
-					
+
 					log.Printf("Sending pull request for model: %s", modelName)
-					
+
 					// Execute pull request
 					pullResp, err := client.Do(pullReq)
 					if err != nil {
@@ -323,7 +323,7 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 						return resp, nil
 					}
 					defer pullResp.Body.Close()
-					
+
 					// Check if pull was successful
 					if pullResp.StatusCode != http.StatusOK {
 						pullRespBody, _ := io.ReadAll(pullResp.Body)
@@ -332,7 +332,7 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 						resp.Body = io.NopCloser(bytes.NewReader(respBody))
 						return resp, nil
 					}
-					
+
 					// Read pull response body to ensure it completes
 					_, err = io.Copy(io.Discard, pullResp.Body)
 					if err != nil {
@@ -341,9 +341,9 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 						resp.Body = io.NopCloser(bytes.NewReader(respBody))
 						return resp, nil
 					}
-					
+
 					log.Printf("Successfully pulled model: %s. Retrying original request...", modelName)
-					
+
 					// Recreate the original request
 					retryReq, err := http.NewRequest(req.Method, req.URL.String(), bytes.NewReader(originalBody))
 					if err != nil {
@@ -352,12 +352,12 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 						resp.Body = io.NopCloser(bytes.NewReader(respBody))
 						return resp, nil
 					}
-					
+
 					// Copy all headers from the original request
 					for key, vals := range req.Header {
 						retryReq.Header[key] = vals
 					}
-					
+
 					// Execute the retry request
 					retryResp, err := client.Do(retryReq)
 					if err != nil {
@@ -366,14 +366,14 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 						resp.Body = io.NopCloser(bytes.NewReader(respBody))
 						return resp, nil
 					}
-					
+
 					// Return the retry response
 					log.Printf("Retry request completed with status: %d", retryResp.StatusCode)
 					return retryResp, nil
 				}
 			}
 		}
-		
+
 		// If we couldn't handle the error, restore the body and return the original response
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 	} else if resp.StatusCode != http.StatusOK {
@@ -389,31 +389,6 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		// Restore the response body so it can be read again by downstream code
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
-	}
-
-	// Special handling for the /api/ps endpoint to transform response format
-	if strings.HasSuffix(t.originalPath, "/api/ps") && resp.StatusCode == http.StatusOK {
-		// Read the original response body
-		originalBody, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return nil, err
-		}
-
-		// Transform the response body format
-		transformedBody, err := transformPsResponse(originalBody)
-		if err != nil {
-			// If transformation fails, return original response
-			log.Printf("Failed to transform /api/ps response: %v", err)
-			resp.Body = io.NopCloser(bytes.NewReader(originalBody))
-			return resp, nil
-		}
-
-		// Replace the response body with the transformed one
-		resp.Body = io.NopCloser(bytes.NewReader(transformedBody))
-		resp.ContentLength = int64(len(transformedBody))
-		resp.Header.Set("Content-Length", fmt.Sprintf("%d", resp.ContentLength))
-		log.Printf("Transformed /api/ps response format")
 	}
 
 	return resp, nil
@@ -567,7 +542,7 @@ func PingEndpoint(targetURL string, apiKey string) error {
 	// Check the status code
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("error response from Ollama endpoint (status %d): %s", 
+		return fmt.Errorf("error response from Ollama endpoint (status %d): %s",
 			resp.StatusCode, string(bodyBytes))
 	}
 
