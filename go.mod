@@ -1,8 +1,6 @@
 module github.com/NorskHelsenett/goophy
 
-go 1.23.0
-
-toolchain go1.23.7
+go 1.26.0
 
 require (
 	github.com/google/go-github/v50 v50.2.0
@@ -10,10 +8,10 @@ require (
 )
 
 require (
-	github.com/ProtonMail/go-crypto v1.1.6 // indirect
-	github.com/cloudflare/circl v1.6.1 // indirect
-	github.com/google/go-querystring v1.1.0 // indirect
-	golang.org/x/crypto v0.37.0 // indirect
-	golang.org/x/oauth2 v0.29.0 // indirect
-	golang.org/x/sys v0.32.0 // indirect
+	github.com/ProtonMail/go-crypto v1.4.0 // indirect
+	github.com/cloudflare/circl v1.6.3 // indirect
+	github.com/google/go-querystring v1.2.0 // indirect
+	golang.org/x/crypto v0.48.0 // indirect
+	golang.org/x/oauth2 v0.36.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
 )

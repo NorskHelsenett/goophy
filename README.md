@@ -137,7 +137,7 @@ Common endpoints include:
 - `/api/generate` - Generate text from a prompt
 - `/api/chat` - Chat with a model
 - `/api/embeddings` - Get embeddings for a text
-- `/api/tags` - List available models
+- `/api/models` - List available models (OpenAI-compatible)
 
 ## Example
 

@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/NorskHelsenett/goophy/internal/env"
 	"github.com/NorskHelsenett/goophy/internal/proxy"
@@ -100,9 +104,15 @@ func main() {
 	}
 
 	// Check for env-file flag at top level and load environment
-	for i, arg := range os.Args {
-		if (arg == "--env-file") && i+1 < len(os.Args) {
+	// Also find the command index (skipping --env-file and its value)
+	cmdIndex := 1
+	for i := 1; i < len(os.Args); i++ {
+		if os.Args[i] == "--env-file" && i+1 < len(os.Args) {
 			*envFile = os.Args[i+1]
+			i++ // skip the value
+			cmdIndex = i + 1
+		} else if os.Args[i] != "" && os.Args[i][0] != '-' {
+			cmdIndex = i
 			break
 		}
 	}
@@ -110,13 +120,21 @@ func main() {
 	loadEnvFile(envFile, true)
 
 	// Parse command
-	switch os.Args[1] {
+	if cmdIndex >= len(os.Args) {
+		printGlobalHelp()
+		os.Exit(0)
+	}
+
+	cmd := os.Args[cmdIndex]
+	cmdArgs := os.Args[cmdIndex+1:]
+
+	switch cmd {
 	case "serve":
-		serveCommand(os.Args[2:])
+		serveCommand(cmdArgs)
 	case "update":
-		updateCommand(os.Args[2:])
+		updateCommand(cmdArgs)
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmd)
 		printGlobalHelp()
 		os.Exit(1)
 	}
@@ -174,12 +192,16 @@ func serveCommand(args []string) {
 	}
 	fmt.Printf("  API_KEY:          %s\n\n", apiKeyDisplay)
 
+	// Cancel pending work (health check, in-flight requests) on Ctrl-C / SIGTERM.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// Initialize auto-updater with default options
 	autoUpdater := updater.New(updater.DefaultOptions(version))
 	autoUpdater.Start()
 	defer autoUpdater.Stop()
 
-	if err := proxy.PingEndpoint(targetURL, apiKey); err != nil {
+	if err := proxy.PingEndpoint(ctx, targetURL, apiKey); err != nil {
 		fmt.Fprintf(os.Stderr, "Error connecting to Ollama endpoint: %v\n", err)
 		os.Exit(1)
 	}
@@ -190,8 +212,10 @@ func serveCommand(args []string) {
 		log.Fatalf("Failed to create proxy: %v", err)
 	}
 
-	// Start the server (this will block until the server is stopped)
-	log.Fatal(ollamaProxy.Start())
+	// Start the server (blocks until the context is cancelled or the server fails).
+	if err := ollamaProxy.Start(ctx); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
 }
 
 func updateCommand(args []string) {
