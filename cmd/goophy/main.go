@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
+	goophy "github.com/NorskHelsenett/goophy"
 	"github.com/NorskHelsenett/goophy/internal/env"
 	"github.com/NorskHelsenett/goophy/internal/proxy"
 	"github.com/NorskHelsenett/goophy/internal/updater"
@@ -14,8 +19,22 @@ import (
 // Set by GoReleaser via ldflags: -X main.version=...
 var version = "dev"
 
+// displayVersion returns a human-facing version string. Tagged release builds
+// set `version` via ldflags; otherwise we fall back to the version documented
+// in the embedded CHANGELOG.md so local and container builds still report a
+// meaningful version. The auto-update gate keeps using the raw `version`.
+func displayVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if v := goophy.ChangelogVersion(); v != "" {
+		return v + "-dev"
+	}
+	return version
+}
+
 func printGlobalHelp() {
-	fmt.Fprintf(os.Stderr, "Goophy - Ollama API Proxy, version %s\n\n", version)
+	fmt.Fprintf(os.Stderr, "Goophy - Ollama API Proxy, version %s\n\n", displayVersion())
 	fmt.Fprintf(os.Stderr, "Usage: goophy [options] [command]\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
 	fmt.Fprintf(os.Stderr, "  -h, --help            Show this help message and exit\n")
@@ -27,6 +46,7 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "  update         Check for and apply available updates\n\n")
 
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
+	fmt.Fprintf(os.Stderr, "  HOST             Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for non-localhost)\n")
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
 	fmt.Fprintf(os.Stderr, "  OLLAMA_ENDPOINT  Target Ollama API endpoint (default: http://localhost:11434)\n")
 	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n")
@@ -45,13 +65,17 @@ func printGlobalHelp() {
 }
 
 func printServeHelp() {
-	fmt.Fprintf(os.Stderr, "Goophy - Ollama API Proxy, version %s\n\n", version)
+	fmt.Fprintf(os.Stderr, "Goophy - Ollama API Proxy, version %s\n\n", displayVersion())
 	fmt.Fprintf(os.Stderr, "Usage: goophy serve [options]\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
 	fmt.Fprintf(os.Stderr, "  -h, --help            Show this help message and exit\n")
+	fmt.Fprintf(os.Stderr, "  -V, --verbose         Enable verbose logging\n")
+	fmt.Fprintf(os.Stderr, "  --host string         Interface to bind to (default: 127.0.0.1)\n")
+	fmt.Fprintf(os.Stderr, "  --listen-all          Listen on all interfaces (shorthand for --host 0.0.0.0)\n")
 	fmt.Fprintf(os.Stderr, "  --env-file string     Path to an env file to load configuration from\n\n")
 
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
+	fmt.Fprintf(os.Stderr, "  HOST             Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for non-localhost)\n")
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
 	fmt.Fprintf(os.Stderr, "  OLLAMA_ENDPOINT  Target Ollama API endpoint (default: http://localhost:11434)\n")
 	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n")
@@ -64,7 +88,7 @@ func printServeHelp() {
 }
 
 func printUpdateHelp() {
-	fmt.Fprintf(os.Stderr, "Goophy - Ollama API Proxy, version %s\n\n", version)
+	fmt.Fprintf(os.Stderr, "Goophy - Ollama API Proxy, version %s\n\n", displayVersion())
 	fmt.Fprintf(os.Stderr, "Usage: goophy update [options]\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
 	fmt.Fprintf(os.Stderr, "  -h, --help            Show this help message and exit\n")
@@ -95,14 +119,20 @@ func main() {
 
 	// Handle version flag at top level
 	if os.Args[1] == "-v" || os.Args[1] == "--version" {
-		fmt.Println("goophy version:", version)
+		fmt.Println("goophy version:", displayVersion())
 		os.Exit(0)
 	}
 
 	// Check for env-file flag at top level and load environment
-	for i, arg := range os.Args {
-		if (arg == "--env-file") && i+1 < len(os.Args) {
+	// Also find the command index (skipping --env-file and its value)
+	cmdIndex := 1
+	for i := 1; i < len(os.Args); i++ {
+		if os.Args[i] == "--env-file" && i+1 < len(os.Args) {
 			*envFile = os.Args[i+1]
+			i++ // skip the value
+			cmdIndex = i + 1
+		} else if os.Args[i] != "" && os.Args[i][0] != '-' {
+			cmdIndex = i
 			break
 		}
 	}
@@ -110,13 +140,21 @@ func main() {
 	loadEnvFile(envFile, true)
 
 	// Parse command
-	switch os.Args[1] {
+	if cmdIndex >= len(os.Args) {
+		printGlobalHelp()
+		os.Exit(0)
+	}
+
+	cmd := os.Args[cmdIndex]
+	cmdArgs := os.Args[cmdIndex+1:]
+
+	switch cmd {
 	case "serve":
-		serveCommand(os.Args[2:])
+		serveCommand(cmdArgs)
 	case "update":
-		updateCommand(os.Args[2:])
+		updateCommand(cmdArgs)
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmd)
 		printGlobalHelp()
 		os.Exit(1)
 	}
@@ -129,6 +167,10 @@ func serveCommand(args []string) {
 	serveFlags.BoolVar(showHelp, "h", false, "Show help message for serve command (shorthand)")
 	verboseFlag := serveFlags.Bool("verbose", false, "Enable verbose logging")
 	serveFlags.BoolVar(verboseFlag, "V", false, "Enable verbose logging (shorthand)")
+	// Bind address. Empty default means "fall back to the HOST env / 127.0.0.1";
+	// an explicit flag value overrides the env.
+	hostFlag := serveFlags.String("host", "", "Interface to bind to (default 127.0.0.1; use 0.0.0.0 to allow non-localhost requests)")
+	listenAllFlag := serveFlags.Bool("listen-all", false, "Listen on all interfaces (shorthand for --host 0.0.0.0)")
 
 	// Set custom usage function
 	serveFlags.Usage = printServeHelp
@@ -157,8 +199,20 @@ func serveCommand(args []string) {
 	targetURL := env.GetEnv("OLLAMA_ENDPOINT", "http://localhost:11434")
 	apiKey := env.GetEnv("API_KEY", "")
 
+	// Resolve the bind host: --host flag wins, then --listen-all, then the HOST
+	// env, defaulting to localhost-only.
+	host := env.GetEnv("HOST", "127.0.0.1")
+	if *listenAllFlag {
+		host = "0.0.0.0"
+	}
+	if *hostFlag != "" {
+		host = *hostFlag
+	}
+
 	// Display configured environment variables
 	fmt.Println("Starting with configuration:")
+	fmt.Printf("  VERSION:          %s\n", displayVersion())
+	fmt.Printf("  HOST:             %s\n", host)
 	fmt.Printf("  PORT:             %s\n", port)
 	fmt.Printf("  OLLAMA_ENDPOINT:  %s\n", targetURL)
 
@@ -174,24 +228,30 @@ func serveCommand(args []string) {
 	}
 	fmt.Printf("  API_KEY:          %s\n\n", apiKeyDisplay)
 
+	// Cancel pending work (health check, in-flight requests) on Ctrl-C / SIGTERM.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// Initialize auto-updater with default options
 	autoUpdater := updater.New(updater.DefaultOptions(version))
 	autoUpdater.Start()
 	defer autoUpdater.Stop()
 
-	if err := proxy.PingEndpoint(targetURL, apiKey); err != nil {
+	if err := proxy.PingEndpoint(ctx, targetURL, apiKey); err != nil {
 		fmt.Fprintf(os.Stderr, "Error connecting to Ollama endpoint: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Create the proxy
-	ollamaProxy, err := proxy.NewOllamaProxy(port, targetURL, apiKey)
+	ollamaProxy, err := proxy.NewOllamaProxy(host, port, targetURL, apiKey)
 	if err != nil {
 		log.Fatalf("Failed to create proxy: %v", err)
 	}
 
-	// Start the server (this will block until the server is stopped)
-	log.Fatal(ollamaProxy.Start())
+	// Start the server (blocks until the context is cancelled or the server fails).
+	if err := ollamaProxy.Start(ctx); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
 }
 
 func updateCommand(args []string) {
