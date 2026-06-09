@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -71,14 +72,16 @@ func normalizeTarget(targetURL string) (*url.URL, error) {
 
 // OllamaProxy represents a proxy server for the Ollama API.
 type OllamaProxy struct {
+	host      string
 	port      string
 	targetURL *url.URL
 	apiKey    string
 	server    *http.Server
 }
 
-// NewOllamaProxy creates a new Ollama proxy.
-func NewOllamaProxy(port, targetURL, apiKey string) (*OllamaProxy, error) {
+// NewOllamaProxy creates a new Ollama proxy. host is the interface address to
+// bind to (e.g. "127.0.0.1" for localhost-only, "0.0.0.0" for all interfaces).
+func NewOllamaProxy(host, port, targetURL, apiKey string) (*OllamaProxy, error) {
 	hadScheme := strings.HasPrefix(targetURL, "http://") || strings.HasPrefix(targetURL, "https://")
 	target, err := normalizeTarget(targetURL)
 	if err != nil {
@@ -89,6 +92,7 @@ func NewOllamaProxy(port, targetURL, apiKey string) (*OllamaProxy, error) {
 	}
 
 	return &OllamaProxy{
+		host:      host,
 		port:      port,
 		targetURL: target,
 		apiKey:    apiKey,
@@ -124,15 +128,19 @@ func (p *OllamaProxy) Start(ctx context.Context) error {
 
 	proxy.Transport = newCustomTransport(defaultMaxRedirects)
 
+	addr := net.JoinHostPort(p.host, p.port)
 	p.server = &http.Server{
-		Addr:    ":" + p.port,
+		Addr:    addr,
 		Handler: http.HandlerFunc(p.handle(proxy)),
 	}
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- p.server.ListenAndServe() }()
 
-	log.Printf("Ollama proxy server started at http://localhost:%s", p.port)
+	log.Printf("Ollama proxy server listening on %s", addr)
+	if p.host == "127.0.0.1" || p.host == "localhost" || p.host == "::1" {
+		log.Print("Only local (loopback) connections are accepted; set HOST=0.0.0.0 (or --host 0.0.0.0) to allow external access")
+	}
 
 	select {
 	case err := <-serveErr:

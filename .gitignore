@@ -1,4 +1,7 @@
 __debug_*
 .env
+# Local Go build caches (e.g. from containerized builds)
+.gocache/
+.gomodcache/
 # Added by goreleaser init:
 dist/

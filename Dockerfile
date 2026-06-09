@@ -23,7 +23,10 @@ WORKDIR /app
 COPY --from=builder /app/goophy .
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-# Set environment variables with defaults
+# Set environment variables with defaults.
+# Bind all interfaces inside the container: it is network-isolated, and host
+# exposure is controlled by `docker run -p`. (The binary defaults to 127.0.0.1.)
+ENV HOST=0.0.0.0
 ENV PORT=22434
 ENV OLLAMA_ENDPOINT=http://localhost:11434
 ENV API_KEY=""
