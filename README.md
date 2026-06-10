@@ -10,19 +10,33 @@ This proxy server forwards all requests to an Ollama API endpoint while adding a
 
 ## Configuration
 
-The proxy uses the following environment variables:
+The proxy can be configured with environment variables or, equivalently, with
+command-line flags. Each option supports **both syntaxes** — when a flag and its
+environment variable are both set, the flag wins.
 
-- `PORT`: The port to run the proxy server on (default: `22434`)
-- `OLLAMA_ENDPOINT`: The target Ollama endpoint to forward requests to (default: `http://localhost:11434`)
-- `API_KEY`: The API key to use for authentication (default: empty)
-- `DISABLE_AUTO_UPDATE`: Disable auto update for the goophy.
-- `UPDATE_CHECK_INTERVAL`: How often to check for updates (default: 24h)
+| Env variable            | Flag (`serve`)    | Default                  | Description                                       |
+| ----------------------- | ----------------- | ------------------------ | ------------------------------------------------- |
+| `HOST`                  | `--host`          | `127.0.0.1`              | Interface to bind to (`--listen-all` = `0.0.0.0`) |
+| `PORT`                  | `--port`          | `22434`                  | Port to run the proxy server on                   |
+| `API_ENDPOINT`          | `--api-endpoint`  | `http://localhost:11434` | Target API endpoint to forward requests to        |
+| `API_KEY`               | `--api-key`       | _(empty)_                | API key used for authentication                   |
+| `DISABLE_AUTO_UPDATE`   | —                 | `false`                  | Disable auto-update                               |
+| `UPDATE_CHECK_INTERVAL` | —                 | `24h`                    | How often to check for updates                    |
 
-Environment variables can be provided in multiple ways:
+> **Deprecated:** `OLLAMA_ENDPOINT` / `--ollama-endpoint` still work as aliases
+> for `API_ENDPOINT` / `--api-endpoint`, but print a warning. Prefer the new
+> names; the aliases may be removed in a future release.
 
-1. Directly in the command line: `PORT=22434 OLLAMA_ENDPOINT=http://localhost:11434 goophy serve`
-2. From a `.env` file in the current directory (automatically loaded)
-3. From a custom env file specified with the `--env-file` flag: `goophy --env-file my-config.env serve`
+Configuration can be provided in multiple ways:
+
+1. Command-line flags: `goophy serve --port 22434 --api-endpoint http://localhost:11434 --api-key sk-...`
+   (the `--flag=value` form works too, e.g. `--port=22434`)
+2. Environment variables: `PORT=22434 API_ENDPOINT=http://localhost:11434 goophy serve`
+3. From a `.env` file in the current directory (automatically loaded)
+4. From a custom env file specified with the `--env-file` flag: `goophy --env-file my-config.env serve`
+
+Flags and `--env-file` may be placed **before or after** the command — `goophy serve --env-file my-config.env`
+and `goophy --env-file my-config.env serve` are equivalent.
 
 See `example.env` for a sample configuration file format.
 
@@ -39,7 +53,7 @@ See `example.env` for a sample configuration file format.
 Create a `.env` file with the following content:
 
 ```.env
-OLLAMA_ENDPOINT="https://openwebui.com/ollama"
+API_ENDPOINT="https://openwebui.com/ollama"
 API_KEY="sk-your-key-from-OWUI"
 ```
 Then run the following container:
@@ -60,11 +74,15 @@ go build -ldflags="-X main.version=0.1.3" -o goophy ./cmd/goophy/
 # Run the proxy with default settings
 ./goophy serve
 
-# Run with custom settings using environment variables
-PORT=22434 OLLAMA_ENDPOINT=https://my-ollama-server.example.com API_KEY=my-secret-key ./goophy serve
+# Run with custom settings using flags
+./goophy serve --port 22434 --api-endpoint https://my-api-server.example.com/v1 --api-key my-secret-key
 
-# Run with settings from a config file
+# ...or the equivalent environment variables
+PORT=22434 API_ENDPOINT=https://my-api-server.example.com/v1 API_KEY=my-secret-key ./goophy serve
+
+# Run with settings from a config file (flag works before or after the command)
 ./goophy --env-file my-config.env serve
+./goophy serve --env-file my-config.env
 
 # A .env file in the current directory is automatically loaded
 # echo "API_KEY=my-secret-key" > .env
@@ -80,7 +98,7 @@ You can also build and run this proxy in Docker:
 docker build -t ollama-proxy .
 
 # Run the container
-docker run -p 22434:22434 -e OLLAMA_ENDPOINT=https://my-ollama-server.example.com -e API_KEY=my-secret-key ollama-proxy
+docker run -p 22434:22434 -e API_ENDPOINT=https://my-api-server.example.com/v1 -e API_KEY=my-secret-key ollama-proxy
 ```
 
 ### OpenWebUI

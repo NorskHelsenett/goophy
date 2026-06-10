@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	goophy "github.com/NorskHelsenett/goophy"
@@ -48,7 +49,7 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
 	fmt.Fprintf(os.Stderr, "  HOST             Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for non-localhost)\n")
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
-	fmt.Fprintf(os.Stderr, "  OLLAMA_ENDPOINT  Target Ollama API endpoint (default: http://localhost:11434)\n")
+	fmt.Fprintf(os.Stderr, "  API_ENDPOINT     Target API endpoint to forward requests to (default: http://localhost:11434)\n")
 	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n")
 	fmt.Fprintf(os.Stderr, "  \n")
 	fmt.Fprintf(os.Stderr, "  Environment variables can also be set in a .env file in the current directory\n")
@@ -61,30 +62,33 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "   - CORS support for browser applications\n\n")
 
 	fmt.Fprintf(os.Stderr, "Example usage:\n")
-	fmt.Fprintf(os.Stderr, "  OLLAMA_ENDPOINT=http://my-ollama-server:11434 API_KEY=secret123 goophy serve\n\n")
+	fmt.Fprintf(os.Stderr, "  API_ENDPOINT=https://api.example.com/v1 API_KEY=secret123 goophy serve\n\n")
 }
 
 func printServeHelp() {
 	fmt.Fprintf(os.Stderr, "Goophy - Ollama API Proxy, version %s\n\n", displayVersion())
 	fmt.Fprintf(os.Stderr, "Usage: goophy serve [options]\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
-	fmt.Fprintf(os.Stderr, "  -h, --help            Show this help message and exit\n")
-	fmt.Fprintf(os.Stderr, "  -V, --verbose         Enable verbose logging\n")
-	fmt.Fprintf(os.Stderr, "  --host string         Interface to bind to (default: 127.0.0.1)\n")
-	fmt.Fprintf(os.Stderr, "  --listen-all          Listen on all interfaces (shorthand for --host 0.0.0.0)\n")
-	fmt.Fprintf(os.Stderr, "  --env-file string     Path to an env file to load configuration from\n\n")
+	fmt.Fprintf(os.Stderr, "  -h, --help                Show this help message and exit\n")
+	fmt.Fprintf(os.Stderr, "  -V, --verbose             Enable verbose logging\n")
+	fmt.Fprintf(os.Stderr, "  --host string             Interface to bind to (default: 127.0.0.1)\n")
+	fmt.Fprintf(os.Stderr, "  --port string             Port number to listen on (default: 22434)\n")
+	fmt.Fprintf(os.Stderr, "  --api-endpoint string     Target API endpoint to forward requests to (default: http://localhost:11434)\n")
+	fmt.Fprintf(os.Stderr, "  --api-key string          API key for authentication (default: none)\n")
+	fmt.Fprintf(os.Stderr, "  --listen-all              Listen on all interfaces (shorthand for --host 0.0.0.0)\n")
+	fmt.Fprintf(os.Stderr, "  --env-file string         Path to an env file to load configuration from\n\n")
 
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
 	fmt.Fprintf(os.Stderr, "  HOST             Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for non-localhost)\n")
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
-	fmt.Fprintf(os.Stderr, "  OLLAMA_ENDPOINT  Target Ollama API endpoint (default: http://localhost:11434)\n")
+	fmt.Fprintf(os.Stderr, "  API_ENDPOINT     Target API endpoint to forward requests to (default: http://localhost:11434)\n")
 	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n")
 	fmt.Fprintf(os.Stderr, "  \n")
 	fmt.Fprintf(os.Stderr, "  Environment variables can also be set in a .env file in the current directory\n")
 	fmt.Fprintf(os.Stderr, "  or specified using the --env-file flag.\n\n")
 
 	fmt.Fprintf(os.Stderr, "Example usage:\n")
-	fmt.Fprintf(os.Stderr, "  OLLAMA_ENDPOINT=http://my-ollama-server:11434 API_KEY=secret123 goophy serve\n\n")
+	fmt.Fprintf(os.Stderr, "  API_ENDPOINT=https://api.example.com/v1 API_KEY=secret123 goophy serve\n\n")
 }
 
 func printUpdateHelp() {
@@ -102,51 +106,32 @@ func printUpdateHelp() {
 	fmt.Fprintf(os.Stderr, "  goophy update\n\n")
 }
 
+// knownCommands lists the subcommands goophy understands. It is used to locate
+// the command token regardless of where flags are placed around it, so global
+// and command flags may appear either before or after the command.
+var knownCommands = map[string]bool{
+	"serve":  true,
+	"update": true,
+}
+
 func main() {
-	// Global flags
-	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
-	showVersion := globalFlags.Bool("version", false, "Print the version and exit")
-	globalFlags.BoolVar(showVersion, "v", false, "Print the version and exit (shorthand)")
-	showHelp := globalFlags.Bool("help", false, "Show help message")
-	globalFlags.BoolVar(showHelp, "h", false, "Show help message (shorthand)")
-	envFile := globalFlags.String("env-file", "", "Path to an env file to load configuration from")
+	args := os.Args[1:]
 
-	// Check for no args or help flag at top level
-	if len(os.Args) < 2 || os.Args[1] == "-h" || os.Args[1] == "--help" {
+	if len(args) == 0 {
 		printGlobalHelp()
 		os.Exit(0)
 	}
 
-	// Handle version flag at top level
-	if os.Args[1] == "-v" || os.Args[1] == "--version" {
-		fmt.Println("goophy version:", displayVersion())
-		os.Exit(0)
-	}
+	// --env-file may appear before or after the command (e.g. both
+	// "goophy --env-file f serve" and "goophy serve --env-file f"). Extract and
+	// load it first so environment-derived configuration is available to every
+	// command, and so the per-command flag sets never see it.
+	envFile, args := extractEnvFile(args)
+	loadEnvFile(&envFile, true)
 
-	// Check for env-file flag at top level and load environment
-	// Also find the command index (skipping --env-file and its value)
-	cmdIndex := 1
-	for i := 1; i < len(os.Args); i++ {
-		if os.Args[i] == "--env-file" && i+1 < len(os.Args) {
-			*envFile = os.Args[i+1]
-			i++ // skip the value
-			cmdIndex = i + 1
-		} else if os.Args[i] != "" && os.Args[i][0] != '-' {
-			cmdIndex = i
-			break
-		}
-	}
-
-	loadEnvFile(envFile, true)
-
-	// Parse command
-	if cmdIndex >= len(os.Args) {
-		printGlobalHelp()
-		os.Exit(0)
-	}
-
-	cmd := os.Args[cmdIndex]
-	cmdArgs := os.Args[cmdIndex+1:]
+	// Find the command anywhere in the remaining args; everything else is
+	// forwarded to the command's flag set, preserving order.
+	cmd, cmdArgs := splitCommand(args)
 
 	switch cmd {
 	case "serve":
@@ -154,10 +139,73 @@ func main() {
 	case "update":
 		updateCommand(cmdArgs)
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmd)
-		printGlobalHelp()
-		os.Exit(1)
+		handleNoCommand(args)
 	}
+}
+
+// splitCommand returns the first token naming a known command together with all
+// remaining arguments (order preserved). This allows flags to be placed before
+// or after the command on the command line.
+func splitCommand(args []string) (cmd string, rest []string) {
+	rest = make([]string, 0, len(args))
+	for _, a := range args {
+		if cmd == "" && knownCommands[a] {
+			cmd = a
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return cmd, rest
+}
+
+// extractEnvFile pulls an --env-file value from anywhere in args, supporting
+// both "--env-file path" and "--env-file=path" (and single-dash) forms. The
+// flag and its value are removed from the returned args so downstream command
+// flag parsing never sees it. The last occurrence wins.
+func extractEnvFile(args []string) (envFile string, rest []string) {
+	rest = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--env-file" || a == "-env-file":
+			if i+1 < len(args) {
+				envFile = args[i+1]
+				i++ // skip the value
+			}
+		case strings.HasPrefix(a, "--env-file="):
+			envFile = strings.TrimPrefix(a, "--env-file=")
+		case strings.HasPrefix(a, "-env-file="):
+			envFile = strings.TrimPrefix(a, "-env-file=")
+		default:
+			rest = append(rest, a)
+		}
+	}
+	return envFile, rest
+}
+
+// handleNoCommand deals with invocations that contain no recognized command:
+// top-level help/version flags, an unknown command, or nothing at all.
+func handleNoCommand(args []string) {
+	for _, a := range args {
+		if a == "-h" || a == "--help" {
+			printGlobalHelp()
+			os.Exit(0)
+		}
+		if a == "-v" || a == "--version" {
+			fmt.Println("goophy version:", displayVersion())
+			os.Exit(0)
+		}
+	}
+	// Report the first non-flag token as an unknown command, if any.
+	for _, a := range args {
+		if a != "" && a[0] != '-' {
+			fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", a)
+			printGlobalHelp()
+			os.Exit(1)
+		}
+	}
+	printGlobalHelp()
+	os.Exit(0)
 }
 
 func serveCommand(args []string) {
@@ -169,8 +217,16 @@ func serveCommand(args []string) {
 	serveFlags.BoolVar(verboseFlag, "V", false, "Enable verbose logging (shorthand)")
 	// Bind address. Empty default means "fall back to the HOST env / 127.0.0.1";
 	// an explicit flag value overrides the env.
-	hostFlag := serveFlags.String("host", "", "Interface to bind to (default 127.0.0.1; use 0.0.0.0 to allow non-localhost requests)")
 	listenAllFlag := serveFlags.Bool("listen-all", false, "Listen on all interfaces (shorthand for --host 0.0.0.0)")
+	// Every option below supports both a --flag and an environment variable.
+	// An empty flag default means "fall back to the env var / built-in default";
+	// an explicit flag value overrides the env (see resolve).
+	hostFlag := serveFlags.String("host", "", "Interface to bind to (default 127.0.0.1; use 0.0.0.0 to allow non-localhost requests)")
+	portFlag := serveFlags.String("port", "", "Port number to listen on (default 22434)")
+	endpointFlag := serveFlags.String("api-endpoint", "", "Target API endpoint to forward requests to (default http://localhost:11434)")
+	apiKeyFlag := serveFlags.String("api-key", "", "API key for authentication (default none)")
+	// Deprecated alias for --api-endpoint, kept so existing setups keep working.
+	ollamaEndpointFlag := serveFlags.String("ollama-endpoint", "", "Deprecated: use --api-endpoint")
 
 	// Set custom usage function
 	serveFlags.Usage = printServeHelp
@@ -194,19 +250,25 @@ func serveCommand(args []string) {
 		log.Printf("Verbose logging enabled")
 	}
 
-	// Get environment variables
-	port := env.GetEnv("PORT", "22434")
-	targetURL := env.GetEnv("OLLAMA_ENDPOINT", "http://localhost:11434")
-	apiKey := env.GetEnv("API_KEY", "")
+	// Resolve configuration: an explicit --flag wins over the env var, which
+	// wins over the built-in default.
+	port := resolve(*portFlag, "PORT", "22434")
+	apiKey := resolve(*apiKeyFlag, "API_KEY", "")
 
-	// Resolve the bind host: --host flag wins, then --listen-all, then the HOST
-	// env, defaulting to localhost-only.
-	host := env.GetEnv("HOST", "127.0.0.1")
-	if *listenAllFlag {
+	// Upstream endpoint: prefer the API_ENDPOINT / --api-endpoint option, but
+	// fall back to the deprecated OLLAMA_ENDPOINT / --ollama-endpoint with a
+	// warning so existing configurations keep working.
+	targetURL := resolveAlias(
+		alias{*endpointFlag, "API_ENDPOINT", "--api-endpoint"},
+		alias{*ollamaEndpointFlag, "OLLAMA_ENDPOINT", "--ollama-endpoint"},
+		"http://localhost:11434",
+	)
+
+	// Bind host follows the same rule, with --listen-all as a 0.0.0.0 shorthand
+	// that the explicit --host flag still overrides.
+	host := resolve(*hostFlag, "HOST", "127.0.0.1")
+	if *listenAllFlag && *hostFlag == "" {
 		host = "0.0.0.0"
-	}
-	if *hostFlag != "" {
-		host = *hostFlag
 	}
 
 	// Display configured environment variables
@@ -214,7 +276,7 @@ func serveCommand(args []string) {
 	fmt.Printf("  VERSION:          %s\n", displayVersion())
 	fmt.Printf("  HOST:             %s\n", host)
 	fmt.Printf("  PORT:             %s\n", port)
-	fmt.Printf("  OLLAMA_ENDPOINT:  %s\n", targetURL)
+	fmt.Printf("  API_ENDPOINT:     %s\n", targetURL)
 
 	// Mask API key if present
 	apiKeyDisplay := "Not configured"
@@ -314,6 +376,41 @@ func updateCommand(args []string) {
 	fmt.Printf("Successfully updated to version %s\n", updateInfo.LatestVersion)
 	fmt.Println("Please restart the application to use the new version.")
 	os.Exit(0)
+}
+
+// resolve returns the flag value when set (non-empty), otherwise the value of
+// the named environment variable, otherwise the default. This gives every
+// option both a --flag and an env-var syntax, with the flag taking precedence.
+func resolve(flagVal, envKey, def string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	return env.GetEnv(envKey, def)
+}
+
+// alias describes one source for an option: a flag value, the env var backing
+// it, and the human-facing flag name used in deprecation warnings.
+type alias struct {
+	flagVal string
+	envKey  string
+	name    string
+}
+
+// resolveAlias resolves an option that has a primary name and one or more
+// deprecated aliases. Sources are tried in order — for each, the flag value
+// wins over its env var — and the first non-empty value is used. When the
+// winning source is anything other than the first (primary) alias, a
+// deprecation warning naming the primary is printed. Falls back to def.
+func resolveAlias(primary alias, deprecated alias, def string) string {
+	if v := resolve(primary.flagVal, primary.envKey, ""); v != "" {
+		return v
+	}
+	if v := resolve(deprecated.flagVal, deprecated.envKey, ""); v != "" {
+		log.Printf("warning: %s/%s is deprecated; use %s/%s instead",
+			deprecated.name, deprecated.envKey, primary.name, primary.envKey)
+		return v
+	}
+	return def
 }
 
 func loadEnvFile(envFile *string, reportError bool) {
