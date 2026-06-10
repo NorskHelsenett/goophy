@@ -88,7 +88,7 @@ func NewOllamaProxy(host, port, targetURL, apiKey string) (*OllamaProxy, error) 
 		return nil, err
 	}
 	if !hadScheme {
-		log.Printf("No protocol specified in OLLAMA_ENDPOINT, using: %s", target)
+		log.Printf("No protocol specified in API_ENDPOINT, using: %s", target)
 	}
 
 	return &OllamaProxy{

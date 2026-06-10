@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-06-09
+
+### Added
+- `serve` now accepts `--port`, `--api-endpoint`, and `--api-key` flags in
+  addition to the existing `--host`. Every option supports both a `--flag` and
+  its environment variable, with the flag taking precedence.
+- Flags and `--env-file` may be placed before or after the command, in either
+  `--flag value` or `--flag=value` form (e.g. both `goophy serve --env-file f`
+  and `goophy --env-file f serve` work).
+
+### Changed
+- The upstream endpoint is now configured via `API_ENDPOINT` / `--api-endpoint`,
+  reflecting that goophy proxies OpenAI-compatible endpoints and not only
+  Ollama. `OLLAMA_ENDPOINT` / `--ollama-endpoint` continue to work as deprecated
+  aliases (with a warning) and may be removed in a future release.
+
 ## [0.2.0] - 2026-06-01
 
 ### Added
