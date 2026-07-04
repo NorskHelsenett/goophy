@@ -6,7 +6,7 @@ A simple proxy server for Ollama that adds authentication to requests.
 
 ## Overview
 
-This proxy server forwards all requests to an Ollama API endpoint while adding an `Authorization: Bearer` token header for authentication. It supports all Ollama API endpoints and preserves original request methods, paths, headers, and bodies.
+This proxy server forwards all requests to an upstream LLM API while adding an `Authorization: Bearer` token header for authentication. It preserves original request methods, headers, and bodies, and works with **Ollama, vLLM, Open WebUI, and other OpenAI-compatible servers** — auto-detecting the upstream at startup and adapting its behavior (see [Supported upstreams](#supported-upstreams)).
 
 ## Configuration
 
@@ -39,6 +39,44 @@ Flags and `--env-file` may be placed **before or after** the command — `goophy
 and `goophy --env-file my-config.env serve` are equivalent.
 
 See `example.env` for a sample configuration file format.
+
+## Supported upstreams
+
+goophy is not Ollama-only. At startup it probes `API_ENDPOINT` to identify the
+upstream flavor and self-configures accordingly, so you can point it at any of
+these with just a host (no need to hand-write the `/v1` or `/api` path):
+
+| Upstream                    | Detected via                                   | OpenAI path prefix | Auto-pull |
+| --------------------------- | ---------------------------------------------- | ------------------ | --------- |
+| **Ollama**                  | `GET /` returns `Ollama is running`, `/api/tags` | `/v1`              | ✅ enabled |
+| **vLLM**                    | `/v1/models` with `owned_by: "vllm"` / uvicorn | `/v1`              | ❌ disabled |
+| **Open WebUI**              | `/api/config`, `/health` → `{"status":true}`   | `/api`             | ✅ enabled |
+| **Other OpenAI-compatible** | `/v1/models`                                   | `/v1`              | ❌ disabled |
+
+What "self-configures" means:
+
+- **Automatic path routing.** OpenAI-style requests (`/chat/completions`,
+  `/completions`, `/embeddings`, `/rerank`, `/models`) are rewritten to the prefix
+  the upstream expects — `/api/...` for Open WebUI, `/v1/...` for vLLM/Ollama. So a
+  client sending `POST /chat/completions` reaches `…/api/chat/completions` on Open
+  WebUI and `…/v1/chat/completions` on vLLM. Already-prefixed paths and
+  Ollama-native paths (`/api/chat`, `/api/generate`, the `/ollama` prefix) are
+  passed through unchanged.
+- **Auto-pull only where it applies.** The retry-and-`/api/pull` on a missing model
+  is kept for Ollama/Open WebUI and skipped for vLLM and generic OpenAI servers,
+  which don't support pulling.
+- **Non-fatal startup.** If the upstream isn't reachable yet, goophy warns and
+  starts anyway, forwarding requests once it comes up.
+
+Detection is logged on startup, e.g.:
+
+```
+Detected upstream: vLLM (/v1/models responded 200, Server: uvicorn)
+Auto-pull disabled: vLLM upstreams don't support /api/pull
+```
+
+Run with `VERBOSE=true` to also log each path rewrite
+(`Routed /chat/completions -> /api/chat/completions for Open WebUI upstream`).
 
 ## Usage
 

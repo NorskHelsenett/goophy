@@ -246,7 +246,7 @@ func serveCommand(args []string) {
 
 	// Set verbose mode in proxy package
 	if *verboseFlag {
-		proxy.Verbose = true
+		proxy.Verbose.Store(true)
 		log.Printf("Verbose logging enabled")
 	}
 
@@ -299,13 +299,17 @@ func serveCommand(args []string) {
 	autoUpdater.Start()
 	defer autoUpdater.Stop()
 
-	if err := proxy.PingEndpoint(ctx, targetURL, apiKey); err != nil {
-		fmt.Fprintf(os.Stderr, "Error connecting to Ollama endpoint: %v\n", err)
-		os.Exit(1)
+	upstream, err := proxy.DetectUpstream(ctx, targetURL, apiKey)
+	if err != nil {
+		// Don't hard-fail: the upstream (Ollama or vLLM) may come up after goophy,
+		// or be reachable only at request time. Warn loudly and start anyway so we
+		// proxy successfully once it's available.
+		fmt.Fprintf(os.Stderr, "Warning: could not reach upstream endpoint yet: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Starting proxy anyway; requests will be forwarded once the upstream is reachable.\n")
 	}
 
-	// Create the proxy
-	ollamaProxy, err := proxy.NewOllamaProxy(host, port, targetURL, apiKey)
+	// Create the proxy, self-configured for the detected upstream flavor.
+	ollamaProxy, err := proxy.NewOllamaProxy(host, port, targetURL, apiKey, upstream)
 	if err != nil {
 		log.Fatalf("Failed to create proxy: %v", err)
 	}
