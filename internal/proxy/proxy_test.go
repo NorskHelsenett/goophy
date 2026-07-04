@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -47,7 +48,7 @@ func TestOpenAIPrefix(t *testing.T) {
 		UpstreamVLLM:      "/v1",
 		UpstreamOpenAI:    "/v1",
 		UpstreamOllama:    "/v1",
-		UpstreamUnknown:   "",
+		UpstreamUnknown:   "/v1", // unidentified upstreams default to the standard OpenAI prefix
 	}
 	for kind, want := range cases {
 		if got := kind.openAIPrefix(); got != want {
@@ -136,7 +137,17 @@ func TestRouteOpenAIPath(t *testing.T) {
 		// Non-OpenAI and unknown paths are left alone.
 		{"ollama native chat untouched", UpstreamOllama, "/api/chat", "/api/chat", false},
 		{"ollama native generate untouched", UpstreamOllama, "/api/generate", "/api/generate", false},
-		{"unknown upstream never routes", UpstreamUnknown, "/chat/completions", "/chat/completions", false},
+		// An unidentified upstream (e.g. Ollama not up at startup) still routes bare
+		// OpenAI paths to /v1 so they don't 404, but leaves native paths alone.
+		{"unknown upstream routes to v1", UpstreamUnknown, "/chat/completions", "/v1/chat/completions", true},
+		{"unknown native chat untouched", UpstreamUnknown, "/api/chat", "/api/chat", false},
+		// A path that merely shares a suffix must NOT be routed: Ollama-native
+		// /api/embeddings stays put (only /v1 or bare is OpenAI-style on Ollama)...
+		{"ollama native embeddings untouched", UpstreamOllama, "/api/embeddings", "/api/embeddings", false},
+		// ...but on Open WebUI /api IS the OpenAI prefix, so it routes (idempotently).
+		{"openwebui api embeddings routes", UpstreamOpenWebUI, "/api/embeddings", "/api/embeddings", true},
+		// A client /ollama prefix is not an OpenAI prefix; leave it for rewritePath.
+		{"ollama-prefixed embeddings untouched", UpstreamOllama, "/ollama/api/embeddings", "/ollama/api/embeddings", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -176,7 +187,9 @@ func TestResolvePath(t *testing.T) {
 		{"gateway base preserved", "http://h/gateway", UpstreamVLLM, "/chat/completions", "/gateway/chat/completions", "/gateway/v1/chat/completions"},
 		// Non-OpenAI path falls back to rewritePath (which returns the director path here).
 		{"ollama native falls back", "http://h", UpstreamOllama, "/api/chat", "/api/chat", "/api/chat"},
-		{"unknown upstream falls back", "http://h", UpstreamUnknown, "/chat/completions", "/chat/completions", "/chat/completions"},
+		// Unidentified upstream still routes OpenAI paths to /v1 (see openAIPrefix).
+		{"unknown upstream routes to v1", "http://h", UpstreamUnknown, "/chat/completions", "/chat/completions", "/v1/chat/completions"},
+		{"unknown native falls back", "http://h", UpstreamUnknown, "/api/chat", "/api/chat", "/api/chat"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -279,6 +292,71 @@ func TestDetectUpstreamReachableButUnknown(t *testing.T) {
 	}
 	if kind != UpstreamUnknown {
 		t.Errorf("DetectUpstream = %s, want unknown", kind)
+	}
+}
+
+// TestProxyRoutesOpenAIPathUnknownUpstream reproduces the "Ollama not up at
+// startup" case: detection failed so the proxy is built with UpstreamUnknown, and
+// a client still POSTs the bare OpenAI path /chat/completions. The upstream must
+// receive it rewritten to /v1/chat/completions rather than a bare path that 404s.
+func TestProxyRoutesOpenAIPathUnknownUpstream(t *testing.T) {
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	p, err := NewOllamaProxy("127.0.0.1", "0", upstream.URL, "", UpstreamUnknown)
+	if err != nil {
+		t.Fatalf("NewOllamaProxy: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/chat/completions", nil)
+	p.handle(p.newReverseProxy())(rec, req)
+
+	if gotPath != "/v1/chat/completions" {
+		t.Errorf("upstream received path %q, want /v1/chat/completions", gotPath)
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("response status = %d, want 200", rec.Code)
+	}
+}
+
+func TestDetectUpstreamHonorsBasePath(t *testing.T) {
+	// Upstream served under a subpath: only /ollama/* is answered, host-root 404s.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ollama/" {
+			_, _ = w.Write([]byte("Ollama is running"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	got, err := DetectUpstream(context.Background(), srv.URL+"/ollama", "")
+	if err != nil {
+		t.Fatalf("DetectUpstream returned error: %v", err)
+	}
+	if got != UpstreamOllama {
+		t.Errorf("DetectUpstream = %s, want Ollama", got)
+	}
+}
+
+func TestDetectUpstreamAuthRequired(t *testing.T) {
+	// Every probe is rejected with 401: reachable but the key is missing/wrong.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	kind, err := DetectUpstream(context.Background(), srv.URL, "")
+	if !errors.Is(err, ErrUpstreamAuth) {
+		t.Fatalf("DetectUpstream error = %v, want ErrUpstreamAuth", err)
+	}
+	if kind != UpstreamUnknown {
+		t.Errorf("DetectUpstream kind = %s, want unknown", kind)
 	}
 }
 

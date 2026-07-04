@@ -5,6 +5,41 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] - 2026-07-04
+
+### Added
+- Automatic upstream detection: goophy probes the endpoint at startup and
+  identifies whether it's Ollama, vLLM, Open WebUI, or a generic
+  OpenAI-compatible server, then adapts its behavior (e.g. auto-pull is only
+  attempted against Ollama-style upstreams).
+- OpenAI-style path routing: a client can point at goophy with a bare host and
+  send `/chat/completions`, `/completions`, `/embeddings`, `/rerank`, or
+  `/models`; goophy rewrites the path to the prefix the detected upstream expects
+  (`/v1` for vLLM/Ollama/OpenAI, `/api` for Open WebUI).
+
+### Changed
+- Bumped dependencies (`github.com/cloudflare/circl`, `golang.org/x/crypto`,
+  `golang.org/x/sys`).
+- Hardened the auto-updater, fixed the multi-arch Docker build, and added a
+  `golangci-lint` configuration.
+
+### Fixed
+- An unidentified upstream (e.g. Ollama not yet running when goophy starts) no
+  longer disables path routing: bare OpenAI paths still route to `/v1`, so
+  `POST /chat/completions` reaches Ollama instead of 404ing.
+- OpenAI path routing is now anchored: a shared suffix no longer misroutes
+  Ollama-native paths such as `/api/embeddings`, and client `/ollama/...`
+  prefixes are preserved.
+- Upstream detection honors a base path in `API_ENDPOINT` (e.g.
+  `http://gateway/ollama`), probing under it instead of the host root.
+- Startup now fails fast when the upstream is reachable but rejects every probe
+  with 401/403, surfacing a wrong or missing `API_KEY` immediately instead of
+  letting every proxied request fail later.
+- A partial request-body read no longer forwards a stale `Content-Length`, which
+  the transport rejected as a length/body mismatch.
+- Redirect logging is now gated by verbose mode, matching the rest of the
+  transport logging.
+
 ## [0.2.1] - 2026-06-09
 
 ### Added
