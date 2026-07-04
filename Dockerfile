@@ -1,4 +1,7 @@
-FROM golang:1.26-alpine AS builder
+# Build on the native build platform and cross-compile to the target arch, so
+# the Go toolchain never runs under QEMU emulation (which crashes the Go 1.26 GC
+# when building linux/amd64 on an arm64 host).
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 # Install ca-certificates
 RUN apk --no-cache add ca-certificates
@@ -12,7 +15,11 @@ COPY . ./
 
 # Download dependencies and build a static binary
 RUN go mod tidy
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s -extldflags '-static'" -o goophy ./cmd/goophy
+ARG TARGETOS
+ARG TARGETARCH
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-w -s -extldflags '-static'" -o goophy ./cmd/goophy
 
 # Final minimal image
 FROM scratch

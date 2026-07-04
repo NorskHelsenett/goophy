@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -15,11 +16,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
-// Verbose enables per-request body and rewrite logging.
-var Verbose bool
+// SetVerbose enables per-request body and rewrite logging.
+var Verbose atomic.Bool
 
 // defaultMaxRedirects matches Go's standard client default.
 const defaultMaxRedirects = 10
@@ -76,12 +78,15 @@ type OllamaProxy struct {
 	port      string
 	targetURL *url.URL
 	apiKey    string
+	upstream  UpstreamKind
 	server    *http.Server
 }
 
 // NewOllamaProxy creates a new Ollama proxy. host is the interface address to
 // bind to (e.g. "127.0.0.1" for localhost-only, "0.0.0.0" for all interfaces).
-func NewOllamaProxy(host, port, targetURL, apiKey string) (*OllamaProxy, error) {
+// upstream is the detected upstream flavor (see DetectUpstream); pass
+// UpstreamUnknown to keep the default Ollama-compatible behavior.
+func NewOllamaProxy(host, port, targetURL, apiKey string, upstream UpstreamKind) (*OllamaProxy, error) {
 	hadScheme := strings.HasPrefix(targetURL, "http://") || strings.HasPrefix(targetURL, "https://")
 	target, err := normalizeTarget(targetURL)
 	if err != nil {
@@ -96,6 +101,7 @@ func NewOllamaProxy(host, port, targetURL, apiKey string) (*OllamaProxy, error) 
 		port:      port,
 		targetURL: target,
 		apiKey:    apiKey,
+		upstream:  upstream,
 	}, nil
 }
 
@@ -111,27 +117,10 @@ func (p *OllamaProxy) Start(ctx context.Context) error {
 		log.Print("API Key authentication enabled")
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(p.targetURL)
-
-	// Wrap the default director to set the upstream host, inject auth, and
-	// reconcile the request path with the target's base path.
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalPath := req.URL.Path
-		originalDirector(req)
-		req.Host = p.targetURL.Host
-		if p.apiKey != "" {
-			req.Header.Set("Authorization", bearer(p.apiKey))
-		}
-		req.URL.Path = p.rewritePath(originalPath, req.URL.Path)
-	}
-
-	proxy.Transport = newCustomTransport(defaultMaxRedirects)
-
 	addr := net.JoinHostPort(p.host, p.port)
 	p.server = &http.Server{
 		Addr:    addr,
-		Handler: http.HandlerFunc(p.handle(proxy)),
+		Handler: http.HandlerFunc(p.handle(p.newReverseProxy())),
 	}
 
 	serveErr := make(chan error, 1)
@@ -151,6 +140,33 @@ func (p *OllamaProxy) Start(ctx context.Context) error {
 		defer cancel()
 		return p.server.Shutdown(shutdownCtx)
 	}
+}
+
+// newReverseProxy builds the reverse proxy for the configured target: a director
+// that sets the upstream host, injects auth, and routes the path (see resolvePath),
+// plus a transport whose auto-pull behavior matches the detected upstream flavor.
+func (p *OllamaProxy) newReverseProxy() *httputil.ReverseProxy {
+	proxy := httputil.NewSingleHostReverseProxy(p.targetURL)
+
+	// Wrap the default director to set the upstream host, inject auth, and
+	// reconcile the request path with the target's base path.
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalPath := req.URL.Path
+		originalDirector(req)
+		req.Host = p.targetURL.Host
+		if p.apiKey != "" {
+			req.Header.Set("Authorization", bearer(p.apiKey))
+		}
+		req.URL.Path = p.resolvePath(originalPath, req.URL.Path)
+	}
+
+	autoPull := p.upstream.SupportsPull()
+	if !autoPull {
+		log.Printf("Auto-pull disabled: %s upstreams don't support /api/pull", p.upstream)
+	}
+	proxy.Transport = newCustomTransport(defaultMaxRedirects, autoPull)
+	return proxy
 }
 
 // handle returns the HTTP handler that normalizes request bodies, applies CORS,
@@ -175,6 +191,31 @@ func (p *OllamaProxy) handle(proxy *httputil.ReverseProxy) http.HandlerFunc {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		proxy.ServeHTTP(w, r)
 	}
+}
+
+// resolvePath decides the upstream path for a request. It first applies
+// upstream-aware routing for OpenAI-style endpoints (so a bare "/chat/completions"
+// reaches "/api/chat/completions" on Open WebUI or "/v1/chat/completions" on
+// vLLM/Ollama); when no routing rule applies it falls back to the "/ollama"
+// reconciliation in rewritePath. directorPath is the path already produced by the
+// default director.
+func (p *OllamaProxy) resolvePath(originalPath, directorPath string) string {
+	routed, ok := routeOpenAIPath(p.upstream, originalPath)
+	if !ok {
+		return p.rewritePath(originalPath, directorPath)
+	}
+
+	// Honor an explicit base path in API_ENDPOINT, but don't double a prefix the
+	// endpoint already carries (e.g. API_ENDPOINT=.../v1 with a /v1 route).
+	base := strings.TrimSuffix(p.targetURL.Path, "/")
+	if base != "" && !strings.HasPrefix(routed, base+"/") && routed != base {
+		routed = base + routed
+	}
+	final := strings.ReplaceAll(routed, "//", "/")
+	if Verbose.Load() && final != originalPath {
+		log.Printf("Routed %s -> %s for %s upstream", originalPath, final, p.upstream)
+	}
+	return final
 }
 
 // rewritePath reconciles the incoming path with the target's base path so the
@@ -228,21 +269,33 @@ func rewriteRequestBody(r *http.Request) {
 	bodyBytes, err := io.ReadAll(r.Body)
 	r.Body.Close()
 	if err != nil {
+		// The read failed partway. Forward what we managed to read so the request
+		// isn't dropped, but sync ContentLength to the (possibly truncated) body:
+		// leaving the original larger length would make the transport abort with a
+		// ContentLength/body mismatch instead of forwarding.
+		setRequestBody(r, bodyBytes)
 		return
 	}
 
 	processed, modified := processModelBody(r.URL.Path, bodyBytes)
 	if !modified {
-		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		setRequestBody(r, bodyBytes)
 		return
 	}
 
-	if Verbose {
+	if Verbose.Load() {
 		log.Printf("Final forwarded body for %s: %s", r.URL.Path, processed)
 	}
-	r.Body = io.NopCloser(bytes.NewReader(processed))
-	r.ContentLength = int64(len(processed))
-	r.Header.Set("Content-Length", strconv.Itoa(len(processed)))
+	setRequestBody(r, processed)
+}
+
+// setRequestBody replaces r.Body with b, keeping ContentLength and the
+// Content-Length header consistent with it so the transport never sees a
+// length/body mismatch.
+func setRequestBody(r *http.Request, b []byte) {
+	r.Body = io.NopCloser(bytes.NewReader(b))
+	r.ContentLength = int64(len(b))
+	r.Header.Set("Content-Length", strconv.Itoa(len(b)))
 }
 
 // customTransport forwards requests with a redirect-following client, logs the
@@ -250,14 +303,15 @@ func rewriteRequestBody(r *http.Request) {
 type customTransport struct {
 	client       *http.Client
 	maxRedirects int
+	autoPull     bool // attempt Ollama /api/pull when a model is missing
 }
 
-func newCustomTransport(maxRedirects int) *customTransport {
-	t := &customTransport{maxRedirects: maxRedirects}
+func newCustomTransport(maxRedirects int, autoPull bool) *customTransport {
+	t := &customTransport{maxRedirects: maxRedirects, autoPull: autoPull}
 	t.client = &http.Client{
 		Transport: http.DefaultTransport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) > 0 {
+			if len(via) > 0 && Verbose.Load() {
 				log.Printf("Following redirect: %s -> %s", via[len(via)-1].URL, req.URL)
 			}
 			if len(via) >= maxRedirects {
@@ -290,8 +344,10 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	newReq.ContentLength = req.ContentLength
 
 	// Buffer the body for endpoints we may need to replay after an auto-pull.
+	// Skipped entirely when auto-pull is off (e.g. vLLM), which also disables the
+	// missing-model retry path below since originalBody stays nil.
 	var originalBody []byte
-	if req.Body != nil && req.Method == http.MethodPost && hasPathSuffix(req.URL.Path, pullablePaths) {
+	if t.autoPull && req.Body != nil && req.Method == http.MethodPost && hasPathSuffix(req.URL.Path, pullablePaths) {
 		originalBody, err = io.ReadAll(req.Body)
 		if err != nil {
 			return nil, fmt.Errorf("reading request body: %w", err)
@@ -330,7 +386,7 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // logExchange logs a single request/response line, suppressing HEAD unless Verbose.
 func (t *customTransport) logExchange(req *http.Request, resp *http.Response) {
-	if req.Method == http.MethodHead && !Verbose {
+	if req.Method == http.MethodHead && !Verbose.Load() {
 		return
 	}
 	orig, _ := req.Context().Value(origPathKey{}).(string)
@@ -499,12 +555,12 @@ func processModelBody(path string, body []byte) ([]byte, bool) {
 		}
 
 		updated := stripOpenAIPrefix(v)
-		if updated != v && Verbose {
+		if updated != v && Verbose.Load() {
 			log.Printf("Stripped openai/ prefix from model (%s field): %s -> %s", field, v, updated)
 		}
 		if !isOpenAIEndpoint {
 			tagged := addDefaultTagToModel(updated)
-			if tagged != updated && Verbose {
+			if tagged != updated && Verbose.Load() {
 				log.Printf("Updated model in body (%s field): %s -> %s", field, updated, tagged)
 			}
 			updated = tagged
@@ -542,19 +598,19 @@ func syncShowNameModel(body map[string]any) bool {
 	switch {
 	case hasName && !hasModel:
 		body["model"] = nameVal
-		if Verbose {
+		if Verbose.Load() {
 			log.Printf("Added missing 'model' field for /api/show using name=%s", nameVal)
 		}
 		return true
 	case hasModel && !hasName:
 		body["name"] = modelVal
-		if Verbose {
+		if Verbose.Load() {
 			log.Printf("Added missing 'name' field for /api/show using model=%s", modelVal)
 		}
 		return true
 	case hasName && hasModel && nameVal != modelVal:
 		body["model"] = nameVal // prefer name, overwrite model to match
-		if Verbose {
+		if Verbose.Load() {
 			log.Printf("Normalized differing name/model for /api/show: name=%s model=%s", nameVal, modelVal)
 		}
 		return true
@@ -562,35 +618,271 @@ func syncShowNameModel(body map[string]any) bool {
 	return false
 }
 
-// PingEndpoint checks that the Ollama endpoint is reachable by hitting /health.
-// It returns nil on success and a descriptive error otherwise. The request is
-// bounded by ctx, so a cancelled ctx aborts the check.
-func PingEndpoint(ctx context.Context, targetURL, apiKey string) error {
+// UpstreamKind identifies the flavor of API server goophy is proxying to, so it
+// can adapt its behavior (e.g. only Ollama-style upstreams support auto-pull).
+type UpstreamKind int
+
+const (
+	// UpstreamUnknown means the server is reachable but its flavor wasn't identified.
+	UpstreamUnknown UpstreamKind = iota
+	UpstreamOllama
+	UpstreamVLLM
+	UpstreamOpenWebUI
+	UpstreamOpenAI // generic OpenAI-compatible server
+)
+
+func (k UpstreamKind) String() string {
+	switch k {
+	case UpstreamOllama:
+		return "Ollama"
+	case UpstreamVLLM:
+		return "vLLM"
+	case UpstreamOpenWebUI:
+		return "Open WebUI"
+	case UpstreamOpenAI:
+		return "OpenAI-compatible"
+	default:
+		return "unknown"
+	}
+}
+
+// SupportsPull reports whether this upstream understands Ollama's /api/pull, and
+// therefore whether auto-pull-on-missing-model is worth attempting. Only positively
+// identified OpenAI-only servers (vLLM, generic OpenAI) are excluded; everything
+// else (Ollama, Open WebUI, or unknown) keeps the Ollama behavior to avoid
+// regressing existing setups.
+func (k UpstreamKind) SupportsPull() bool {
+	switch k {
+	case UpstreamVLLM, UpstreamOpenAI:
+		return false
+	default:
+		return true
+	}
+}
+
+// openAIPrefix returns the base path this upstream serves its OpenAI-compatible
+// API under: "/api" for Open WebUI, "/v1" for everyone else. Unknown upstreams
+// — unreachable at startup, or reachable but unidentified — fall back to "/v1",
+// the universal OpenAI prefix and Ollama's own, so a client's bare
+// "/chat/completions" still routes correctly for the common Ollama case instead
+// of being forwarded verbatim and 404ing.
+func (k UpstreamKind) openAIPrefix() string {
+	if k == UpstreamOpenWebUI {
+		return "/api"
+	}
+	return "/v1"
+}
+
+// openAIStyleSuffixes are OpenAI-compatible endpoints whose required prefix differs
+// per upstream. Ordered longest-first so "/chat/completions" is matched before the
+// "/completions" that is its own suffix.
+var openAIStyleSuffixes = []string{
+	"/chat/completions",
+	"/completions",
+	"/embeddings",
+	"/rerank",
+	"/models",
+}
+
+// routeOpenAIPath rewrites an OpenAI-style request path to the prefix the detected
+// upstream expects, so a client can point at goophy with a bare host (no /v1 or
+// /api) and still reach the right endpoint. For example, with an Open WebUI
+// upstream "/chat/completions" becomes "/api/chat/completions"; with vLLM, Ollama,
+// or an as-yet-unidentified upstream it becomes "/v1/chat/completions". It returns
+// (path, false) for a non-OpenAI path such as Ollama-native "/api/chat", so the
+// caller keeps the existing "/ollama"-reconciliation forwarding behavior.
+func routeOpenAIPath(kind UpstreamKind, path string) (string, bool) {
+	prefix := kind.openAIPrefix()
+	for _, suffix := range openAIStyleSuffixes {
+		if !strings.HasSuffix(path, suffix) {
+			continue
+		}
+		// Only route a path that is the bare endpoint ("/embeddings") or already
+		// carries a recognized OpenAI prefix ("/v1/embeddings", or this upstream's
+		// own prefix). Anything else — notably an Ollama-native "/api/embeddings"
+		// or a client "/ollama/..." prefix — merely shares the suffix and must be
+		// left for rewritePath, so we don't strip its prefix or mangle its body.
+		head := strings.TrimSuffix(path, suffix)
+		if head == "" || head == "/v1" || head == prefix {
+			return prefix + suffix, true
+		}
+	}
+	return path, false
+}
+
+// healthProbe pairs an endpoint path with the upstream flavor a 2xx from it hints
+// at. Ordered most-specific first so a distinctive endpoint wins before we fall
+// back to the generic "/health" liveness check.
+type healthProbe struct {
+	path string
+	hint UpstreamKind
+}
+
+// healthProbes are tried in order to confirm reachability and identify the flavor.
+// Ordering matters: distinctive endpoints come first so an ambiguous one (like
+// /api/version, which BOTH Ollama and Open WebUI answer) rarely gets to decide.
+// A probe that returns 2xx but can't be classified (UpstreamUnknown) doesn't stop
+// the sweep — we keep going in case a later probe is decisive.
+var healthProbes = []healthProbe{
+	{"/", UpstreamUnknown},             // native Ollama returns the "Ollama is running" banner
+	{"/api/config", UpstreamOpenWebUI}, // Open WebUI's public config; Ollama & vLLM 404 here
+	{"/api/tags", UpstreamOllama},      // native Ollama (Open WebUI serves this only under /ollama)
+	{"/v1/models", UpstreamOpenAI},     // vLLM / generic OpenAI (refined via headers+body)
+	{"/api/models", UpstreamOpenWebUI}, // Open WebUI aggregated model list
+	{"/api/version", UpstreamOllama},   // Ollama, but Open WebUI answers too — refined below
+	{"/health", UpstreamUnknown},       // generic liveness; {"status":true} means Open WebUI
+}
+
+// looksLikePythonServer reports whether the Server header indicates a Python ASGI
+// stack (uvicorn/starlette/hypercorn) — i.e. Open WebUI or vLLM, never native
+// Ollama, which is written in Go. Best-effort only: a reverse proxy may overwrite
+// this header, so it's used to disambiguate, not as a primary signal.
+func looksLikePythonServer(server string) bool {
+	return strings.Contains(server, "uvicorn") ||
+		strings.Contains(server, "starlette") ||
+		strings.Contains(server, "hypercorn")
+}
+
+// classifyUpstream refines a probe's hint using the response's Server header and
+// body so we can tell vLLM apart from other OpenAI-compatible servers, and native
+// Ollama apart from Open WebUI (which answers many of the same Ollama paths).
+func classifyUpstream(hint UpstreamKind, path string, hdr http.Header, body []byte) UpstreamKind {
+	server := strings.ToLower(hdr.Get("Server"))
+	// bodyContains reports whether the response body holds needle, ignoring ASCII
+	// case and spaces. Computed lazily so probes that decide on path or header
+	// alone (e.g. Open WebUI's large HTML root) don't pay to transform the body.
+	bodyContains := func(needle string) bool {
+		compact := strings.ReplaceAll(strings.ToLower(string(body)), " ", "")
+		return strings.Contains(compact, needle)
+	}
+
+	switch {
+	case path == "/":
+		// Native Ollama answers the root with the plain-text "Ollama is running".
+		if bodyContains("ollamaisrunning") {
+			return UpstreamOllama
+		}
+		return UpstreamUnknown // e.g. Open WebUI serves its HTML app here — not decisive
+	case strings.HasSuffix(path, "/api/config"):
+		// Open WebUI's /api/config is a JSON object carrying its name/features.
+		return UpstreamOpenWebUI
+	case strings.HasSuffix(path, "/v1/models"):
+		// vLLM tags its models owned_by:"vllm" and is fronted by uvicorn.
+		if bodyContains(`"owned_by":"vllm"`) || looksLikePythonServer(server) {
+			return UpstreamVLLM
+		}
+		return UpstreamOpenAI
+	case strings.HasSuffix(path, "/api/tags"), strings.HasSuffix(path, "/api/version"):
+		// Both native Ollama and Open WebUI answer these. Native Ollama (Go) sends
+		// no uvicorn/Python Server header; a Python one means it's Open WebUI.
+		if looksLikePythonServer(server) {
+			return UpstreamOpenWebUI
+		}
+		return UpstreamOllama
+	case strings.HasSuffix(path, "/health"):
+		// Open WebUI's /health returns {"status":true}; llama.cpp returns {"status":"ok"}.
+		if bodyContains(`"status":true`) {
+			return UpstreamOpenWebUI
+		}
+		return UpstreamUnknown
+	}
+	return hint
+}
+
+// ErrUpstreamAuth means the upstream is reachable but rejected every probe with
+// 401/403 — almost always a missing or wrong API_KEY. Unlike an unreachable
+// upstream (which may simply come up after goophy), this is a configuration error
+// the caller should surface fatally rather than start and fail every request.
+var ErrUpstreamAuth = errors.New("upstream rejected authentication; check API_KEY")
+
+// DetectUpstream checks that the upstream endpoint is reachable and identifies its
+// flavor (Ollama, vLLM, Open WebUI, or generic OpenAI-compatible). It supports both
+// Ollama and OpenAI-compatible servers by probing several well-known endpoints and
+// returns as soon as one responds. It returns a descriptive error only if every
+// probe fails to connect. The requests are bounded by ctx, so a cancelled ctx
+// aborts the check.
+func DetectUpstream(ctx context.Context, targetURL, apiKey string) (UpstreamKind, error) {
 	target, err := normalizeTarget(targetURL)
 	if err != nil {
-		return err
+		return UpstreamUnknown, err
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	healthURL := fmt.Sprintf("%s://%s/health", target.Scheme, target.Host)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
-	}
-	if apiKey != "" {
-		req.Header.Set("Authorization", bearer(apiKey))
-	}
+	// Honor a base path in API_ENDPOINT (e.g. http://gw/ollama) so probes hit the
+	// upstream where it's actually served rather than host-root paths that 404.
+	base := strings.TrimSuffix(target.Path, "/")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to Ollama endpoint: %w", err)
-	}
-	defer resp.Body.Close()
+	var (
+		lastConnErr error  // last transport-level failure (server unreachable)
+		reachable   bool   // saw at least one HTTP response
+		sawAuth     bool   // some probe returned 401/403 (reachable, key needed)
+		lastStatus  int    // last non-2xx status from a reachable server
+		lastBody    []byte // body accompanying lastStatus
+	)
 
-	if resp.StatusCode != http.StatusOK {
+	for _, probe := range healthProbes {
+		probeURL := fmt.Sprintf("%s://%s%s%s", target.Scheme, target.Host, base, probe.path)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			return UpstreamUnknown, fmt.Errorf("creating request: %w", err)
+		}
+		if apiKey != "" {
+			req.Header.Set("Authorization", bearer(apiKey))
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			// Abort immediately if the caller cancelled; don't mask it as unreachable.
+			if ctx.Err() != nil {
+				return UpstreamUnknown, err
+			}
+			lastConnErr = err
+			continue
+		}
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("error response from Ollama endpoint (status %d): %s", resp.StatusCode, body)
+		resp.Body.Close()
+		reachable = true
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			// A 2xx that we can't classify (e.g. Open WebUI's HTML root) doesn't
+			// end the sweep — keep probing for a decisive endpoint.
+			if kind := classifyUpstream(probe.hint, probe.path, resp.Header, body); kind != UpstreamUnknown {
+				if server := resp.Header.Get("Server"); server != "" {
+					log.Printf("Detected upstream: %s (%s responded %d, Server: %s)", kind, probe.path, resp.StatusCode, server)
+				} else {
+					log.Printf("Detected upstream: %s (%s responded %d)", kind, probe.path, resp.StatusCode)
+				}
+				return kind, nil
+			}
+			lastStatus, lastBody = resp.StatusCode, body
+			continue
+		}
+
+		// Non-2xx: the endpoint is reachable but this isn't its path (404) or it
+		// wants auth (401/403). Either way, keep probing — a later public endpoint
+		// may still identify the flavor.
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			sawAuth = true
+		}
+		lastStatus, lastBody = resp.StatusCode, body
 	}
-	return nil
+
+	// Every probe got an HTTP response but none was a clean, classifiable 2xx.
+	if reachable {
+		// Reachable but every attempt was rejected with 401/403: the server is up
+		// and the key is missing or wrong. Fail fast so the operator sees it at
+		// startup instead of every proxied request returning 401 later.
+		if sawAuth {
+			return UpstreamUnknown, fmt.Errorf("endpoint %s://%s reachable but every probe returned 401/403 (last status %d): %w",
+				target.Scheme, target.Host, lastStatus, ErrUpstreamAuth)
+		}
+		// Reachable but merely unrecognized (e.g. all 404): an unusual deployment.
+		// Start anyway so we don't block against it.
+		log.Printf("Warning: endpoint reachable but flavor unknown (last status %d: %s)", lastStatus, lastBody)
+		return UpstreamUnknown, nil
+	}
+
+	return UpstreamUnknown, fmt.Errorf("connecting to endpoint %s://%s: %w", target.Scheme, target.Host, lastConnErr)
 }
