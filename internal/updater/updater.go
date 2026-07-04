@@ -109,7 +109,9 @@ func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// Start begins the auto-update check process
+// Start begins the auto-update check process. Checks are run serially on a
+// single goroutine so that slow GitHub API responses cannot cause goroutine
+// accumulation when ticks fire faster than checks complete.
 func (u *AutoUpdater) Start() {
 	if u.options.DisableAutoUpdates {
 		log.Println("Update checks are disabled")
@@ -124,11 +126,10 @@ func (u *AutoUpdater) Start() {
 
 	u.ticker = time.NewTicker(u.options.CheckInterval)
 
-	// Initial check immediately
-	go u.checkForUpdate()
-
-	// Regular checks based on interval
 	go func() {
+		// Initial check immediately
+		u.checkForUpdate()
+
 		for {
 			select {
 			case <-u.ticker.C:
@@ -277,11 +278,14 @@ func (u *AutoUpdater) findAssetForCurrentPlatform(release *github.RepositoryRele
 	return nil, fmt.Errorf("no compatible binary found for %s/%s", os, arch)
 }
 
-// downloadAndApplyUpdate downloads and applies the update
+// downloadAndApplyUpdate downloads and applies the update.
+// A client with a timeout is used so a slow or malicious CDN cannot hang the
+// updater indefinitely.
 func (u *AutoUpdater) downloadAndApplyUpdate(url, assetName string) error {
 	log.Printf("Downloading update from %s", url)
 
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Get(url)
 	if err != nil {
 		return err
 	}

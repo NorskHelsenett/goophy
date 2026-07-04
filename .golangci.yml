@@ -1,0 +1,75 @@
+run:
+  timeout: 2m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosec
+    - revive
+    - misspell
+    - bodyclose
+    - noctx
+    - copyloopvar
+    - perfsprint
+
+linters-settings:
+  gosec:
+    excludes-generated: true
+    # G101: Look for hardcoded secrets
+    # G104: Errors not checked (we want to be strict)
+    # G107: Url provided to HTTP request as taint (informational)
+    # G204: Subprocess launch with variable (informational)
+    # G304: File path traversal (informational)
+    # G404: Use of weak crypto (informational)
+    excludes:
+      - G107  # informational — proxy URL construction is intentional
+  revive:
+    rules:
+      - name: var-naming
+      - name: exported
+      - name: increment-decrement
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: var-declaration
+      - name: package-comments
+      - name: range
+      - name: receiver-naming
+      - name: errorf
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-handling
+      - name: empty-lines
+      - name: superfluous-else
+      - name: unreachable-code
+      - name: redefines-builtin-id
+  misspell:
+    locale: US
+
+issues:
+  exclude-rules:
+    # cmd/goophy/main.go uses os.Exit which govet warns about
+    - path: cmd/goophy/main.go
+      linters:
+        - revive
+      text: "empty-lines"
+    # main() is allowed to have no exported functions
+    - path: cmd/goophy/main.go
+      linters:
+        - revive
+      text: "package-comments"
+    # noctx: proxy transport intentionally avoids context on internal requests
+    - path: internal/proxy/proxy.go
+      linters:
+        - noctx
+    # gosec G108: Profiling endpoint (not used, but informational)
+    - linters:
+        - gosec
+      text: "G108"

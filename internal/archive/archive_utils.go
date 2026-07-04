@@ -4,11 +4,11 @@ package archive
 import (
 	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 )
 
 // ExtractBinaryFromTarGz extracts the binary from a tar.gz archive
@@ -48,7 +48,7 @@ func ExtractBinaryFromTarGz(gzipStream io.Reader, binaryName string) (io.Reader,
 				return nil, fmt.Errorf("failed to read binary from tar: %w", err)
 			}
 
-			return io.NopCloser(strings.NewReader(string(buffer))), nil
+			return io.NopCloser(bytes.NewReader(buffer)), nil
 		}
 	}
 
@@ -83,7 +83,7 @@ func ExtractBinaryFromZip(zipFile io.ReaderAt, fileSize int64, binaryName string
 				return nil, fmt.Errorf("failed to read binary from zip: %w", err)
 			}
 
-			return io.NopCloser(strings.NewReader(string(buffer))), nil
+			return io.NopCloser(bytes.NewReader(buffer)), nil
 		}
 	}
 
