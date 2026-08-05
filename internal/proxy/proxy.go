@@ -155,6 +155,12 @@ func (p *OllamaProxy) newReverseProxy() *httputil.ReverseProxy {
 		originalPath := req.URL.Path
 		originalDirector(req)
 		req.Host = p.targetURL.Host
+
+		// Remove hop-by-hop headers so they are not forwarded to upstream
+		req.Header.Del("Upgrade")
+		req.Header.Del("Connection")
+		req.Header.Del("HTTP2-Settings")
+
 		if p.apiKey != "" {
 			req.Header.Set("Authorization", bearer(p.apiKey))
 		}
@@ -339,6 +345,17 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("creating proxied request: %w", err)
 	}
 	copyHeader(newReq.Header, req.Header)
+
+	// Strip Hop-by-Hop and Upgrade headers for the outbound request
+	newReq.Header.Del("Upgrade")
+	newReq.Header.Del("Connection")
+	newReq.Header.Del("Keep-Alive")
+	newReq.Header.Del("Proxy-Connection")
+	newReq.Header.Del("Transfer-Encoding")
+	newReq.Header.Del("TE")
+	newReq.Header.Del("Trailer")
+	newReq.Header.Del("HTTP2-Settings")
+
 	// Preserve the known length: NewRequest can't infer it from a NopCloser body,
 	// and a zero ContentLength would force chunked encoding on every request.
 	newReq.ContentLength = req.ContentLength
