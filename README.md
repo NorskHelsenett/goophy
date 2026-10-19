@@ -50,7 +50,7 @@ these with just a host (no need to hand-write the `/v1` or `/api` path):
 | --------------------------- | ---------------------------------------------- | ------------------ | --------- |
 | **Ollama**                  | `GET /` returns `Ollama is running`, `/api/tags` | `/v1`              | ✅ enabled |
 | **vLLM**                    | `/v1/models` with `owned_by: "vllm"` / uvicorn | `/v1`              | ❌ disabled |
-| **Open WebUI**              | `/api/config`, `/health` → `{"status":true}`   | `/api`             | ✅ enabled |
+| **Open WebUI**              | `/api/config`, `/health` → `{"status":true}`   | `/api`             | ❌ disabled |
 | **Other OpenAI-compatible** | `/v1/models`                                   | `/v1`              | ❌ disabled |
 
 What "self-configures" means:
@@ -63,10 +63,13 @@ What "self-configures" means:
   Ollama-native paths (`/api/chat`, `/api/generate`, the `/ollama` prefix) are
   passed through unchanged.
 - **Auto-pull only where it applies.** The retry-and-`/api/pull` on a missing model
-  is kept for Ollama/Open WebUI and skipped for vLLM and generic OpenAI servers,
-  which don't support pulling.
+  is kept for Ollama and skipped for vLLM, Open WebUI (which only exposes pulling
+  under `/ollama/api/pull`) and generic OpenAI servers.
 - **Non-fatal startup.** If the upstream isn't reachable yet, goophy warns and
-  starts anyway, forwarding requests once it comes up.
+  starts anyway, forwarding requests once it comes up. Detection is retried on
+  incoming requests (at most every 30s) until the upstream answers, so routing
+  and auto-pull adapt once it's up. Startup only fails if *every* probe is
+  rejected with 401/403.
 
 Detection is logged on startup, e.g.:
 
