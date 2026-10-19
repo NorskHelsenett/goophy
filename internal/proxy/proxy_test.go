@@ -3,10 +3,14 @@ package proxy
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestUpstreamKindString(t *testing.T) {
@@ -26,11 +30,11 @@ func TestUpstreamKindString(t *testing.T) {
 }
 
 func TestSupportsPull(t *testing.T) {
-	// Only positively-identified OpenAI-only servers skip auto-pull; everything
-	// else (including unknown) keeps Ollama behavior.
+	// Only Ollama and unknown upstreams auto-pull; Open WebUI serves /api/pull
+	// only under /ollama, and vLLM/OpenAI can't pull at all.
 	cases := map[UpstreamKind]bool{
 		UpstreamOllama:    true,
-		UpstreamOpenWebUI: true,
+		UpstreamOpenWebUI: false,
 		UpstreamUnknown:   true,
 		UpstreamVLLM:      false,
 		UpstreamOpenAI:    false,
@@ -97,6 +101,14 @@ func TestClassifyUpstream(t *testing.T) {
 		{"health status true is openwebui", UpstreamUnknown, "/health", "uvicorn", `{"status":true}`, UpstreamOpenWebUI},
 		{"health empty is unknown", UpstreamUnknown, "/health", "uvicorn", "", UpstreamUnknown},
 		{"owned_by check tolerates spaces", UpstreamOpenAI, "/v1/models", "nginx", `{"data":[{"owned_by": "vllm"}]}`, UpstreamVLLM},
+		// Catch-all hosts (SPA servers, gateways) answer every path with 200 HTML;
+		// the JSON endpoints must not classify on status alone.
+		{"api config html is not decisive", UpstreamOpenWebUI, "/api/config", "nginx", "<!doctype html>", UpstreamUnknown},
+		{"api tags html is not decisive", UpstreamOllama, "/api/tags", "nginx", "<!doctype html>", UpstreamUnknown},
+		{"api version html is not decisive", UpstreamOllama, "/api/version", "", "<html></html>", UpstreamUnknown},
+		{"v1 models html is not decisive", UpstreamOpenAI, "/v1/models", "nginx", "<!doctype html>", UpstreamUnknown},
+		{"api models list is openwebui", UpstreamOpenWebUI, "/api/models", "uvicorn", `{"data":[]}`, UpstreamOpenWebUI},
+		{"api models html is not decisive", UpstreamOpenWebUI, "/api/models", "nginx", "<!doctype html>", UpstreamUnknown},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -166,7 +178,9 @@ func newTestProxy(t *testing.T, target string, kind UpstreamKind) *OllamaProxy {
 	if err != nil {
 		t.Fatalf("parsing target %q: %v", target, err)
 	}
-	return &OllamaProxy{targetURL: u, upstream: kind}
+	p := &OllamaProxy{targetURL: u}
+	p.upstream.Store(int32(kind))
+	return p
 }
 
 func TestResolvePath(t *testing.T) {
@@ -183,8 +197,14 @@ func TestResolvePath(t *testing.T) {
 		// Explicit base path in API_ENDPOINT should not be doubled.
 		{"vllm base v1 no double", "http://h/v1", UpstreamVLLM, "/chat/completions", "/v1/chat/completions", "/v1/chat/completions"},
 		{"openwebui base api no double", "http://h/api", UpstreamOpenWebUI, "/chat/completions", "/api/chat/completions", "/api/chat/completions"},
+		// A base ending in an OpenAI prefix names the prefix explicitly, even when
+		// detection picked a different one (or none).
+		{"unknown base api uses api", "http://h/api", UpstreamUnknown, "/chat/completions", "/api/chat/completions", "/api/chat/completions"},
+		{"openwebui base v1 uses v1", "http://h/v1", UpstreamOpenWebUI, "/chat/completions", "/v1/chat/completions", "/v1/chat/completions"},
+		{"gateway base v1 uses v1", "http://h/gw/v1", UpstreamVLLM, "/v1/embeddings", "/gw/v1/v1/embeddings", "/gw/v1/embeddings"},
 		// A non-matching base path is preserved and prepended.
 		{"gateway base preserved", "http://h/gateway", UpstreamVLLM, "/chat/completions", "/gateway/chat/completions", "/gateway/v1/chat/completions"},
+		{"ollama base keeps v1", "http://h/ollama", UpstreamOllama, "/chat/completions", "/ollama/chat/completions", "/ollama/v1/chat/completions"},
 		// Non-OpenAI path falls back to rewritePath (which returns the director path here).
 		{"ollama native falls back", "http://h", UpstreamOllama, "/api/chat", "/api/chat", "/api/chat"},
 		// Unidentified upstream still routes OpenAI paths to /v1 (see openAIPrefix).
@@ -194,7 +214,7 @@ func TestResolvePath(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			p := newTestProxy(t, tc.target, tc.kind)
-			got := p.resolvePath(tc.origPath, tc.directorArg)
+			got := p.resolvePath(tc.kind, tc.origPath, tc.directorArg)
 			if got != tc.want {
 				t.Errorf("resolvePath(%q, %q) [target=%s kind=%s] = %q, want %q",
 					tc.origPath, tc.directorArg, tc.target, tc.kind, got, tc.want)
@@ -369,5 +389,133 @@ func TestDetectUpstreamCancelledContext(t *testing.T) {
 
 	if _, err := DetectUpstream(ctx, srv.URL, ""); err == nil {
 		t.Fatal("DetectUpstream with cancelled context = nil error, want error")
+	}
+}
+
+func TestDetectUpstreamMixedAuthIsNotFatal(t *testing.T) {
+	// vLLM started with --api-key guards /v1 but answers /health openly. Without
+	// API_KEY (clients bring their own), that's not a configuration error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/health":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	kind, err := DetectUpstream(context.Background(), srv.URL, "")
+	if err != nil {
+		t.Fatalf("DetectUpstream error = %v, want nil", err)
+	}
+	if kind != UpstreamUnknown {
+		t.Errorf("DetectUpstream = %s, want unknown", kind)
+	}
+}
+
+func TestDetectUpstreamCatchAllHTMLIsNotOpenWebUI(t *testing.T) {
+	// A host that answers every path with 200 HTML must not be classified.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<!doctype html><html></html>"))
+	}))
+	defer srv.Close()
+
+	kind, err := DetectUpstream(context.Background(), srv.URL, "")
+	if err != nil {
+		t.Fatalf("DetectUpstream returned error: %v", err)
+	}
+	if kind != UpstreamUnknown {
+		t.Errorf("DetectUpstream = %s, want unknown", kind)
+	}
+}
+
+func TestDetectUpstreamStripsOpenAIPrefixFromBase(t *testing.T) {
+	// API_ENDPOINT=http://owui/api must probe /api/config, not /api/api/config.
+	srv := httptest.NewServer(upstreamHandler(UpstreamOpenWebUI))
+	defer srv.Close()
+
+	got, err := DetectUpstream(context.Background(), srv.URL+"/api", "")
+	if err != nil {
+		t.Fatalf("DetectUpstream returned error: %v", err)
+	}
+	if got != UpstreamOpenWebUI {
+		t.Errorf("DetectUpstream = %s, want Open WebUI", got)
+	}
+}
+
+func TestDetectUpstreamStopsAtFirstConnectionFailure(t *testing.T) {
+	// A host that accepts and drops every connection never answers; the sweep
+	// must give up after the first probe instead of trying (and timing out on)
+	// every path.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	accepted := make(chan struct{}, len(healthProbes)*2)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- struct{}{}
+			conn.Close()
+		}
+	}()
+
+	if _, err := DetectUpstream(context.Background(), "http://"+ln.Addr().String(), ""); err == nil {
+		t.Fatal("DetectUpstream on dropping host = nil error, want error")
+	}
+	// The client may retry an idempotent GET once on a fresh connection.
+	if n := len(accepted); n > 2 {
+		t.Errorf("DetectUpstream opened %d connections, want at most 2 (one probe)", n)
+	}
+}
+
+func TestUpstreamKindRedetectsWhenUnknown(t *testing.T) {
+	// Upstream unreachable at startup, then comes up: the proxy must identify it.
+	srv := httptest.NewServer(upstreamHandler(UpstreamOpenWebUI))
+	defer srv.Close()
+
+	p, err := NewOllamaProxy("127.0.0.1", "0", srv.URL, "", UpstreamUnknown)
+	if err != nil {
+		t.Fatalf("NewOllamaProxy: %v", err)
+	}
+	if got := p.upstreamKind(); got != UpstreamUnknown {
+		t.Fatalf("upstreamKind within throttle window = %s, want unknown", got)
+	}
+	p.lastDetect = time.Now().Add(-redetectInterval)
+	if got := p.upstreamKind(); got != UpstreamOpenWebUI {
+		t.Fatalf("upstreamKind after throttle = %s, want Open WebUI", got)
+	}
+}
+
+func TestBarePathBodyIsNormalized(t *testing.T) {
+	// A bare /chat/completions must get the same openai/ stripping as /v1/...
+	var gotPath, gotBody string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+	}))
+	defer upstream.Close()
+
+	p, err := NewOllamaProxy("127.0.0.1", "0", upstream.URL, "", UpstreamVLLM)
+	if err != nil {
+		t.Fatalf("NewOllamaProxy: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(`{"model":"openai/llama3"}`))
+	p.handle(p.newReverseProxy())(httptest.NewRecorder(), req)
+
+	if gotPath != "/v1/chat/completions" {
+		t.Errorf("upstream path = %q, want /v1/chat/completions", gotPath)
+	}
+	if gotBody != `{"model":"llama3"}` {
+		t.Errorf("upstream body = %s, want model llama3", gotBody)
 	}
 }
