@@ -34,7 +34,8 @@ builds:
       - -trimpath
 
 archives:
-  - formats: [tar.gz]
+  - id: default
+    formats: [tar.gz]
     # this name template makes the OS and Arch compatible with the results of `uname`.
     name_template: >-
       {{ .ProjectName }}_
@@ -44,6 +45,22 @@ archives:
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
     # use zip for windows archives
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+  # Legacy-named copies of the same archives (e.g.
+  # goophy_legacy_macos_arm64.tar.gz, goophy_legacy_linux_amd64.tar.gz). The
+  # self-updater in v0.2.2 and earlier only matches assets whose names contain "macos" (for darwin) and Go's arch name
+  # ("amd64"), so without these, existing installs on macOS and on x86_64
+  # Linux/Windows cannot run `goophy update`. Keep these for a few releases
+  # until users are on a version with the fixed matcher. The "legacy" infix
+  # keeps names distinct from the default ones on case-insensitive systems.
+  - id: legacy
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_legacy_
+      {{- if eq .Os "darwin" }}macos{{ else }}{{ .Os }}{{ end }}_
+      {{- .Arch }}
     format_overrides:
       - goos: windows
         formats: [zip]

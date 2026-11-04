@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.3] - 2026-11-04
+
+### Fixed
+- `goophy update` now works on macOS and on x86_64 Linux/Windows. The updater
+  looked for asset names containing `macos`/`amd64`, but releases are named
+  `Darwin`/`x86_64`, so the update check failed with "no compatible binary
+  found". Releases now also ship legacy-named archives
+  (e.g. `goophy_legacy_macos_arm64.tar.gz`) so older binaries can update to this one.
+- Startup only fails on auth when *every* upstream probe is rejected with
+  401/403, not when any single one is (e.g. vLLM with `--api-key` answers
+  `/health` openly).
+- Upstream detection is retried on incoming requests (at most every 30s) while
+  the upstream is unreachable, so routing and auto-pull adapt once it comes up.
+- Detection requires JSON bodies with the expected keys, so catch-all HTML hosts
+  are no longer misclassified.
+- A base path ending in `/v1` or `/api` is treated as the OpenAI prefix and
+  stripped before probing (no more `/api/api/config`).
+- Model names are normalized on bare `/chat/completions` and `/completions`.
+- Auto-pull is disabled for Open WebUI, which only exposes
+  `/ollama/api/pull`.
+
+### Changed
+- Built with Go 1.27; `go-github` upgraded from v50 to v92, which drops several
+  indirect dependencies.
+
 ## [0.2.2] - 2026-07-04
 
 ### Added
