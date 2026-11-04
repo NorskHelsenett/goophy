@@ -1,7 +1,7 @@
 # Build on the native build platform and cross-compile to the target arch, so
 # the Go toolchain never runs under QEMU emulation (which crashes the Go 1.26 GC
 # when building linux/amd64 on an arm64 host).
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
 # Install ca-certificates
 RUN apk --no-cache add ca-certificates

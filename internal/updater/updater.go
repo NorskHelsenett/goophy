@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/NorskHelsenett/goophy/internal/archive"
-	"github.com/google/go-github/v50/github"
+	"github.com/google/go-github/v92/github"
 	"github.com/inconshreveable/go-update"
 )
 
@@ -76,13 +76,15 @@ type AutoUpdater struct {
 
 // New creates a new auto updater
 func New(options Options) *AutoUpdater {
-	// Create a GitHub client
-	client := github.NewClient(nil)
-
-	// Use token if available
-	token := os.Getenv(options.GithubTokenEnvVar)
-	if token != "" {
-		client = github.NewClient(oauth2Transport(token))
+	// Create a GitHub client, authenticated if a token is available
+	var clientOpts []github.ClientOptionsFunc
+	if token := os.Getenv(options.GithubTokenEnvVar); token != "" {
+		clientOpts = append(clientOpts, github.WithAuthToken(token))
+	}
+	client, err := github.NewClient(clientOpts...)
+	if err != nil {
+		log.Printf("Failed to configure GitHub client, using unauthenticated access: %v", err)
+		client, _ = github.NewClient()
 	}
 
 	return &AutoUpdater{
@@ -90,23 +92,6 @@ func New(options Options) *AutoUpdater {
 		client:  client,
 		stopCh:  make(chan struct{}),
 	}
-}
-
-func oauth2Transport(token string) *http.Client {
-	return &http.Client{
-		Transport: &tokenTransport{
-			token: token,
-		},
-	}
-}
-
-type tokenTransport struct {
-	token string
-}
-
-func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	req.Header.Set("Authorization", fmt.Sprintf("token %s", t.token))
-	return http.DefaultTransport.RoundTrip(req)
 }
 
 // Start begins the auto-update check process. Checks are run serially on a
@@ -251,31 +236,65 @@ func (u *AutoUpdater) ApplyUpdate() error {
 	return u.downloadAndApplyUpdate(updateInfo.AssetURL, updateInfo.AssetName)
 }
 
-// findAssetForCurrentPlatform finds the correct binary for the current platform
+// findAssetForCurrentPlatform finds the release archive for the running platform.
 func (u *AutoUpdater) findAssetForCurrentPlatform(release *github.RepositoryRelease) (*github.ReleaseAsset, error) {
-	os := runtime.GOOS
-	arch := runtime.GOARCH
+	names := make([]string, len(release.Assets))
+	for i, asset := range release.Assets {
+		names[i] = asset.GetName()
+	}
+	if i := matchAsset(names, runtime.GOOS, runtime.GOARCH); i >= 0 {
+		return release.Assets[i], nil
+	}
+	return nil, fmt.Errorf("no compatible binary found for %s/%s", runtime.GOOS, runtime.GOARCH)
+}
 
-	// Map Go's OS and arch names to the ones used in release asset names
-	if os == "darwin" {
-		os = "macos"
+// osAliases and archAliases map Go's GOOS/GOARCH to the spellings that may
+// appear in release asset names. GoReleaser's uname-style template produces
+// e.g. "goophy_Darwin_x86_64.tar.gz"; legacy aliases such as
+// "goophy_legacy_macos_amd64.tar.gz" are also published so that binaries from v0.2.2
+// and earlier, which only look for "macos"/"amd64", can still self-update.
+var (
+	osAliases = map[string][]string{
+		"darwin": {"darwin", "macos"},
+	}
+	archAliases = map[string][]string{
+		"amd64": {"x86_64", "amd64"},
+		"386":   {"i386", "386"},
+	}
+)
+
+// matchAsset returns the index of the first archive in names built for
+// goos/goarch, or -1. Matching is case-insensitive and only considers
+// .tar.gz and .zip archives, so checksum files and the like are skipped.
+func matchAsset(names []string, goos, goarch string) int {
+	oses := osAliases[goos]
+	if oses == nil {
+		oses = []string{goos}
+	}
+	arches := archAliases[goarch]
+	if arches == nil {
+		arches = []string{goarch}
 	}
 
-	// The GitHub release assets might have capitalized OS names like "Linux" instead of "linux"
-	// We'll handle this by doing a case-insensitive comparison
-	for _, asset := range release.Assets {
-		name := asset.GetName()
-		nameLower := strings.ToLower(name)
-		osLower := strings.ToLower(os)
-		archLower := strings.ToLower(arch)
-
-		// Check if the asset name contains both the OS and architecture
-		if strings.Contains(nameLower, osLower) && strings.Contains(nameLower, archLower) {
-			return asset, nil
+	for i, name := range names {
+		lower := strings.ToLower(name)
+		if !strings.HasSuffix(lower, ".tar.gz") && !strings.HasSuffix(lower, ".zip") {
+			continue
+		}
+		if containsAny(lower, oses) && containsAny(lower, arches) {
+			return i
 		}
 	}
+	return -1
+}
 
-	return nil, fmt.Errorf("no compatible binary found for %s/%s", os, arch)
+func containsAny(s string, subs []string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // downloadAndApplyUpdate downloads and applies the update.
