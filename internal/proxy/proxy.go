@@ -63,6 +63,29 @@ func hasPathSuffix(path string, suffixes []string) bool {
 	})
 }
 
+// UserAgent identifies goophy on every request it makes to the upstream. main
+// sets it to "goophy/<version>" at startup.
+var UserAgent = "goophy/dev"
+
+// userAgentTransport prefixes outgoing requests' User-Agent with UserAgent. A
+// proxied client's own User-Agent is kept after it (e.g. "goophy/0.2.4 pi/1.2"),
+// so upstream logs show both the proxy and the calling agent; goophy's own
+// requests (probes, auto-pull) carry just UserAgent.
+type userAgentTransport struct{ base http.RoundTripper }
+
+func (t userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	ua := UserAgent
+	switch client := req.Header.Get("User-Agent"); {
+	case strings.HasPrefix(client, UserAgent):
+		ua = client // already stamped (e.g. auto-pull retry); don't stack prefixes
+	case client != "":
+		ua += " " + client
+	}
+	req = req.Clone(req.Context())
+	req.Header.Set("User-Agent", ua)
+	return t.base.RoundTrip(req)
+}
+
 // bearer formats an Authorization header value for the given API key.
 func bearer(apiKey string) string { return "Bearer " + apiKey }
 
@@ -397,7 +420,7 @@ type customTransport struct {
 func newCustomTransport(maxRedirects int) *customTransport {
 	t := &customTransport{maxRedirects: maxRedirects}
 	t.client = &http.Client{
-		Transport: http.DefaultTransport,
+		Transport: userAgentTransport{base: http.DefaultTransport},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) > 0 && Verbose.Load() {
 				log.Printf("Following redirect: %s -> %s", via[len(via)-1].URL, req.URL)
@@ -926,7 +949,7 @@ func DetectUpstream(ctx context.Context, targetURL, apiKey string) (UpstreamKind
 		return UpstreamUnknown, err
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second, Transport: userAgentTransport{base: http.DefaultTransport}}
 
 	// Honor a base path in API_ENDPOINT (e.g. http://gw/ollama) so probes hit the
 	// upstream where it's actually served rather than host-root paths that 404. A

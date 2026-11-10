@@ -296,6 +296,8 @@ func serveCommand(args []string) {
 	defer stop()
 
 	// Initialize auto-updater with default options
+	proxy.UserAgent = "goophy/" + displayVersion()
+
 	autoUpdater := updater.New(updater.DefaultOptions(version))
 	autoUpdater.Start()
 	defer autoUpdater.Stop()

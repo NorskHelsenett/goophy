@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.4] - 2026-11-11
+
+### Added
+- Requests to the upstream now identify goophy in their `User-Agent`. Proxied
+  requests keep the calling client's agent after it
+  (e.g. `goophy/0.2.4 pi/1.2.0`), so upstream logs show which agent made each
+  call. Goophy's own requests (upstream detection, auto-pull) send just
+  `goophy/<version>` instead of Go's default `Go-http-client/1.1`.
+
 ## [0.2.3] - 2026-11-04
 
 ### Fixed
