@@ -40,6 +40,24 @@ and `goophy --env-file my-config.env serve` are equivalent.
 
 See `example.env` for a sample configuration file format.
 
+## The NHN LLM gateway
+
+goophy can sign you in to the LLM gateway and proxy to it with your own token:
+
+```bash
+goophy login     # opens the browser; approve, and you are signed in
+goophy serve     # no API_ENDPOINT/API_KEY needed: proxies to the gateway as you
+goophy usage     # what you have used the last 30 days (--days N)
+goophy logout    # revokes the token and forgets it
+```
+
+`goophy login` opens `https://gw.chat.nhn.no` (override with `--gateway` or
+`GOOPHY_GATEWAY`). When no browser can be opened (over SSH, or with
+`--no-browser`) it prints a link to open on any machine, and asks for the code
+that page shows. The token lasts 90 days and is listed under Tokens in the
+gateway's web interface. An explicit `API_ENDPOINT` or `API_KEY` always wins
+over the login.
+
 ## Supported upstreams
 
 goophy is not Ollama-only. At startup it probes `API_ENDPOINT` to identify the

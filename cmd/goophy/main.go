@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,6 +15,7 @@ import (
 
 	goophy "github.com/NorskHelsenett/goophy"
 	"github.com/NorskHelsenett/goophy/internal/env"
+	"github.com/NorskHelsenett/goophy/internal/gateway"
 	"github.com/NorskHelsenett/goophy/internal/proxy"
 	"github.com/NorskHelsenett/goophy/internal/updater"
 )
@@ -45,6 +47,9 @@ func printGlobalHelp() {
 
 	fmt.Fprintf(os.Stderr, "Commands:\n")
 	fmt.Fprintf(os.Stderr, "  serve          Start the Ollama proxy server\n")
+	fmt.Fprintf(os.Stderr, "  login          Sign in to the LLM gateway (%s) in the browser\n", gateway.DefaultURL)
+	fmt.Fprintf(os.Stderr, "  logout         Revoke the gateway login and forget it\n")
+	fmt.Fprintf(os.Stderr, "  usage          Show your gateway usage\n")
 	fmt.Fprintf(os.Stderr, "  update         Check for and apply available updates\n\n")
 
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
@@ -113,6 +118,9 @@ func printUpdateHelp() {
 var knownCommands = map[string]bool{
 	"serve":  true,
 	"update": true,
+	"login":  true,
+	"logout": true,
+	"usage":  true,
 }
 
 func main() {
@@ -133,12 +141,19 @@ func main() {
 	// Find the command anywhere in the remaining args; everything else is
 	// forwarded to the command's flag set, preserving order.
 	cmd, cmdArgs := splitCommand(args)
+	gateway.UserAgent = "goophy/" + displayVersion()
 
 	switch cmd {
 	case "serve":
 		serveCommand(cmdArgs)
 	case "update":
 		updateCommand(cmdArgs)
+	case "login":
+		loginCommand(cmdArgs)
+	case "logout":
+		logoutCommand(cmdArgs)
+	case "usage":
+		usageCommand(cmdArgs)
 	default:
 		handleNoCommand(args)
 	}
@@ -251,6 +266,10 @@ func serveCommand(args []string) {
 		log.Printf("Verbose logging enabled")
 	}
 
+	// Without an upstream or key of its own, serve proxies to the gateway
+	// goophy is logged in to (goophy login).
+	login, useLogin := gatewayLogin(*endpointFlag, *ollamaEndpointFlag, *apiKeyFlag)
+
 	// Resolve configuration: an explicit --flag wins over the env var, which
 	// wins over the built-in default.
 	port := resolve(*portFlag, "PORT", "22434")
@@ -270,6 +289,20 @@ func serveCommand(args []string) {
 	host := resolve(*hostFlag, "HOST", "127.0.0.1")
 	if *listenAllFlag && *hostFlag == "" {
 		host = "0.0.0.0"
+	}
+
+	if useLogin {
+		// The login is a personal token: proxying with it on a reachable
+		// address would let anyone on the network use the gateway as you.
+		if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			log.Fatalf("Refusing to share your gateway login on %s: bind to 127.0.0.1, or set API_ENDPOINT and API_KEY (e.g. a team token) to serve others.", host)
+		}
+		targetURL, apiKey = login.Gateway, login.Token
+		who := login.Email
+		if who == "" {
+			who = "your account"
+		}
+		fmt.Printf("Using the gateway login for %s (goophy login).\n", who)
 	}
 
 	// Display configured environment variables

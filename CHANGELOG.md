@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - Unreleased
+
+### Added
+- `goophy login` signs in to the NHN LLM gateway (default
+  `https://gw.chat.nhn.no`, or `--gateway` / `GOOPHY_GATEWAY`) through the
+  browser and stores a personal token in the user config directory
+  (`~/Library/Application Support/goophy` on macOS, `~/.config/goophy` on
+  Linux). Without a browser (over SSH, or with `--no-browser`) it prints a link
+  to open anywhere and asks for the code that page shows.
+- `goophy logout` revokes that token on the gateway and forgets it.
+- `goophy usage [--days N]` shows the gateway usage of the logged-in user.
+- `goophy serve` proxies to the gateway with the login when no `API_ENDPOINT`
+  and no `API_KEY` are given. Once logged in, a plain `goophy serve` therefore
+  no longer goes to a local Ollama: set `API_ENDPOINT=http://localhost:11434`
+  for that. It refuses to share the login on a non-loopback address
+  (`--listen-all`), and refuses an expired login.
+
+### Changed
+- Prerelease tags (e.g. `v0.3.0-rc.1`) are published as GitHub prereleases and
+  do not move the container image's `latest` tag, so previews are not
+  picked up by the self-updater or `:latest`.
+
 ## [0.2.4] - 2026-11-11
 
 ### Added

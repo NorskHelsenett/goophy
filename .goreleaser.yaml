@@ -73,6 +73,9 @@ changelog:
       - "^test:"
 
 release:
+  # Tags like v0.3.0-rc.1 are previews: a prerelease is not GitHub's
+  # "latest release", so the self-updater does not offer it to everyone.
+  prerelease: auto
   footer: >-
 
     ---
