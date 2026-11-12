@@ -6,15 +6,21 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
+
+	"golang.org/x/term"
 
 	goophy "github.com/NorskHelsenett/goophy"
 	"github.com/NorskHelsenett/goophy/internal/env"
 	"github.com/NorskHelsenett/goophy/internal/proxy"
+	"github.com/NorskHelsenett/goophy/internal/stats"
+	"github.com/NorskHelsenett/goophy/internal/tui"
 	"github.com/NorskHelsenett/goophy/internal/updater"
 )
 
@@ -52,6 +58,7 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
 	fmt.Fprintf(os.Stderr, "  API_ENDPOINT     Target API endpoint to forward requests to (default: http://localhost:11434)\n")
 	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n")
+	fmt.Fprintf(os.Stderr, "  NO_TUI           Set to true to print logs instead of the dashboard\n")
 	fmt.Fprintf(os.Stderr, "  \n")
 	fmt.Fprintf(os.Stderr, "  Environment variables can also be set in a .env file in the current directory\n")
 	fmt.Fprintf(os.Stderr, "  or specified using the --env-file flag.\n\n")
@@ -77,6 +84,7 @@ func printServeHelp() {
 	fmt.Fprintf(os.Stderr, "  --api-endpoint string     Target API endpoint to forward requests to (default: http://localhost:11434)\n")
 	fmt.Fprintf(os.Stderr, "  --api-key string          API key for authentication (default: none)\n")
 	fmt.Fprintf(os.Stderr, "  --listen-all              Listen on all interfaces (shorthand for --host 0.0.0.0)\n")
+	fmt.Fprintf(os.Stderr, "  --no-tui                  Print logs instead of the interactive dashboard\n")
 	fmt.Fprintf(os.Stderr, "  --env-file string         Path to an env file to load configuration from\n\n")
 
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
@@ -84,9 +92,13 @@ func printServeHelp() {
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
 	fmt.Fprintf(os.Stderr, "  API_ENDPOINT     Target API endpoint to forward requests to (default: http://localhost:11434)\n")
 	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n")
+	fmt.Fprintf(os.Stderr, "  NO_TUI           Set to true to print logs instead of the dashboard\n")
 	fmt.Fprintf(os.Stderr, "  \n")
 	fmt.Fprintf(os.Stderr, "  Environment variables can also be set in a .env file in the current directory\n")
 	fmt.Fprintf(os.Stderr, "  or specified using the --env-file flag.\n\n")
+
+	fmt.Fprintf(os.Stderr, "When stdin and stdout are a terminal, serve shows an interactive dashboard\n")
+	fmt.Fprintf(os.Stderr, "(session stats, requests, models, logs); otherwise it prints logs.\n\n")
 
 	fmt.Fprintf(os.Stderr, "Example usage:\n")
 	fmt.Fprintf(os.Stderr, "  API_ENDPOINT=https://api.example.com/v1 API_KEY=secret123 goophy serve\n\n")
@@ -219,6 +231,7 @@ func serveCommand(args []string) {
 	// Bind address. Empty default means "fall back to the HOST env / 127.0.0.1";
 	// an explicit flag value overrides the env.
 	listenAllFlag := serveFlags.Bool("listen-all", false, "Listen on all interfaces (shorthand for --host 0.0.0.0)")
+	noTUIFlag := serveFlags.Bool("no-tui", false, "Print logs instead of the interactive dashboard")
 	// Every option below supports both a --flag and an environment variable.
 	// An empty flag default means "fall back to the env var / built-in default";
 	// an explicit flag value overrides the env (see resolve).
@@ -272,60 +285,160 @@ func serveCommand(args []string) {
 		host = "0.0.0.0"
 	}
 
-	// Display configured environment variables
-	fmt.Println("Starting with configuration:")
-	fmt.Printf("  VERSION:          %s\n", displayVersion())
-	fmt.Printf("  HOST:             %s\n", host)
-	fmt.Printf("  PORT:             %s\n", port)
-	fmt.Printf("  API_ENDPOINT:     %s\n", targetURL)
-
-	// Mask API key if present
-	apiKeyDisplay := "Not configured"
-	if apiKey != "" {
-		// Show only first and last character if key is long enough
-		if len(apiKey) > 5 {
-			apiKeyDisplay = fmt.Sprintf("%s***%s", apiKey[:1], apiKey[len(apiKey)-1:])
-		} else {
-			apiKeyDisplay = "******" // Mask completely if too short
-		}
-	}
-	fmt.Printf("  API_KEY:          %s\n\n", apiKeyDisplay)
+	cfg := serverConfig{host: host, port: port, targetURL: targetURL, apiKey: apiKey}
 
 	// Cancel pending work (health check, in-flight requests) on Ctrl-C / SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Initialize auto-updater with default options
 	proxy.UserAgent = "goophy/" + displayVersion()
 
+	// The dashboard needs an interactive terminal on both ends; anything else
+	// (Docker, systemd/launchd, piped output) keeps the plain log stream.
+	useTUI := !*noTUIFlag && !strings.EqualFold(env.GetEnv("NO_TUI", ""), "true") &&
+		term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	if useTUI {
+		code := runWithDashboard(ctx, cfg)
+		stop()
+		os.Exit(code)
+	}
+
+	printConfig(cfg)
+	if err := runServer(ctx, cfg, nil); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// serverConfig is the resolved configuration for the serve command.
+type serverConfig struct {
+	host, port, targetURL, apiKey string
+}
+
+// maskedAPIKey returns the API key with all but its first and last character hidden.
+func (c serverConfig) maskedAPIKey() string {
+	switch {
+	case c.apiKey == "":
+		return "Not configured"
+	case len(c.apiKey) > 5:
+		return fmt.Sprintf("%s***%s", c.apiKey[:1], c.apiKey[len(c.apiKey)-1:])
+	default:
+		return "******" // Mask completely if too short
+	}
+}
+
+func printConfig(c serverConfig) {
+	fmt.Println("Starting with configuration:")
+	fmt.Printf("  VERSION:          %s\n", displayVersion())
+	fmt.Printf("  HOST:             %s\n", c.host)
+	fmt.Printf("  PORT:             %s\n", c.port)
+	fmt.Printf("  API_ENDPOINT:     %s\n", c.targetURL)
+	fmt.Printf("  API_KEY:          %s\n\n", c.maskedAPIKey())
+}
+
+// runServer starts the updater, detects the upstream and runs the proxy until
+// ctx is cancelled (returning nil) or the server fails. col, when non-nil,
+// receives per-request statistics for the dashboard.
+func runServer(ctx context.Context, cfg serverConfig, col *stats.Collector) error {
 	autoUpdater := updater.New(updater.DefaultOptions(version))
 	autoUpdater.Start()
 	defer autoUpdater.Stop()
 
-	upstream, err := proxy.DetectUpstream(ctx, targetURL, apiKey)
-	if err != nil {
+	upstream, err := proxy.DetectUpstream(ctx, cfg.targetURL, cfg.apiKey)
+	switch {
+	case errors.Is(err, proxy.ErrUpstreamAuth):
 		// A wrong/missing key is a configuration error the operator must fix now,
 		// so fail fast rather than come up and reject every proxied request.
-		if errors.Is(err, proxy.ErrUpstreamAuth) {
-			log.Fatalf("Upstream authentication failed: %v", err)
-		}
+		return fmt.Errorf("upstream authentication failed: %w", err)
+	case err != nil:
 		// Any other failure means the upstream (Ollama or vLLM) simply isn't up
 		// yet: it may come up after goophy, or be reachable only at request time.
 		// Warn loudly and start anyway so we proxy once it's available.
-		fmt.Fprintf(os.Stderr, "Warning: could not reach upstream endpoint yet: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Starting proxy anyway; requests will be forwarded once the upstream is reachable.\n")
+		if col == nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not reach upstream endpoint yet: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Starting proxy anyway; requests will be forwarded once the upstream is reachable.\n")
+		} else {
+			log.Printf("Warning: could not reach upstream endpoint yet: %v", err)
+			log.Printf("Starting proxy anyway; requests will be forwarded once the upstream is reachable.")
+		}
+		col.SetUpstream("unreachable (retrying)")
+	default:
+		col.SetUpstream(upstream.String())
 	}
 
 	// Create the proxy, self-configured for the detected upstream flavor.
-	ollamaProxy, err := proxy.NewOllamaProxy(host, port, targetURL, apiKey, upstream)
+	ollamaProxy, err := proxy.NewOllamaProxy(cfg.host, cfg.port, cfg.targetURL, cfg.apiKey, upstream)
 	if err != nil {
-		log.Fatalf("Failed to create proxy: %v", err)
+		return fmt.Errorf("failed to create proxy: %w", err)
+	}
+	if col != nil {
+		ollamaProxy.SetCollector(col)
 	}
 
 	// Start the server (blocks until the context is cancelled or the server fails).
-	if err := ollamaProxy.Start(ctx); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+	if err := ollamaProxy.Start(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
 	}
+	return nil
+}
+
+// runWithDashboard runs the server in the background behind the interactive
+// dashboard and returns the process exit code. Logs go to the dashboard's Logs
+// tab while it is up; a fatal error is printed to stderr once it closes.
+func runWithDashboard(ctx context.Context, cfg serverConfig) int {
+	col := stats.New(stats.Info{
+		Version:   displayVersion(),
+		Listen:    net.JoinHostPort(cfg.host, cfg.port),
+		Target:    cfg.targetURL,
+		APIKeySet: cfg.apiKey != "",
+	})
+	log.SetOutput(col)
+	log.SetFlags(log.Ltime)
+	log.Printf("goophy %s · API_KEY %s", displayVersion(), cfg.maskedAPIKey())
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	prog := tui.NewProgram(col)
+	serverErr := make(chan error, 1)
+	go func() {
+		err := runServer(ctx, cfg, col)
+		serverErr <- err
+		prog.Send(tui.StoppedMsg{Err: err})
+	}()
+
+	_, tuiErr := prog.Run()
+	cancel() // user quit (or server stopped): shut the server down
+
+	var err error
+	select {
+	case err = <-serverErr:
+	case <-time.After(15 * time.Second):
+		err = errors.New("timed out waiting for the server to shut down")
+	}
+
+	log.SetOutput(os.Stderr)
+	log.SetFlags(log.LstdFlags)
+
+	snap := col.Snapshot()
+	t := snap.Totals
+	fmt.Printf("goophy stopped after %s · %d requests (%d errors) · %d prompt / %d completion tokens\n",
+		snap.Now.Sub(snap.Started).Round(time.Second), t.Requests, t.Errors, t.PromptTokens, t.CompletionTokens)
+
+	if tuiErr != nil {
+		fmt.Fprintf(os.Stderr, "dashboard error: %v\n", tuiErr)
+	}
+	if err != nil {
+		// Show the tail of the log so the failure has context.
+		for _, l := range snap.Logs[max(0, len(snap.Logs)-15):] {
+			fmt.Fprintln(os.Stderr, l)
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	if tuiErr != nil {
+		return 1
+	}
+	return 0
 }
 
 func updateCommand(args []string) {

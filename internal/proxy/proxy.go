@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/NorskHelsenett/goophy/internal/stats"
 )
 
 // SetVerbose enables per-request body and rewrite logging.
@@ -123,6 +125,10 @@ type OllamaProxy struct {
 	detectMu   sync.Mutex
 	lastDetect time.Time
 	settled    bool // a retry reached the upstream; unknown is now final
+
+	// collector receives per-request statistics when the dashboard is enabled;
+	// nil (the default) disables tracking. See SetCollector.
+	collector *stats.Collector
 }
 
 const (
@@ -194,6 +200,7 @@ func (p *OllamaProxy) upstreamKind() UpstreamKind {
 	}
 	// Reachable: whatever we found is the answer, recognized or not.
 	p.settled = true
+	p.collector.SetUpstream(kind.String())
 	if kind != UpstreamUnknown {
 		p.upstream.Store(int32(kind))
 		logUpstreamBehavior(kind)
@@ -269,9 +276,6 @@ func (p *OllamaProxy) handle(proxy *httputil.ReverseProxy) http.HandlerFunc {
 		// the upstream flavor so routing and auto-pull agree for this request.
 		ctx := context.WithValue(r.Context(), origPathKey{}, r.URL.Path)
 		ctx = context.WithValue(ctx, upstreamKindKey{}, p.upstreamKind())
-		r = r.WithContext(ctx)
-
-		rewriteRequestBody(r)
 
 		// Answer CORS preflight requests directly.
 		if r.Method == http.MethodOptions {
@@ -283,8 +287,41 @@ func (p *OllamaProxy) handle(proxy *httputil.ReverseProxy) http.HandlerFunc {
 			return
 		}
 
+		tracker := p.collector.Begin(r.Method, r.URL.Path, trimUA(r.Header.Get("User-Agent")))
+		if tracker != nil {
+			ctx = context.WithValue(ctx, trackerKey{}, tracker)
+		}
+		r = r.WithContext(ctx)
+
+		body := rewriteRequestBody(r)
+
+		if tracker != nil {
+			if body == nil {
+				body = peekModelBody(r)
+			}
+			if body != nil {
+				tracker.SetModel(requestModel(body))
+				if injected, ok := injectStreamUsage(r.URL.Path, body); ok {
+					setRequestBody(r, injected)
+				}
+			}
+			// Let the transport negotiate (and transparently decode) compression
+			// with the upstream, so the usage scanner sees plain JSON. Clients get
+			// an uncompressed body, which is what LLM streams mostly are anyway.
+			if isLLMPath(r.URL.Path) {
+				r.Header.Del("Accept-Encoding")
+			}
+		}
+
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		proxy.ServeHTTP(w, r)
+		if tracker == nil {
+			proxy.ServeHTTP(w, r)
+			return
+		}
+		tw := &trackingWriter{ResponseWriter: w, t: tracker}
+		proxy.ServeHTTP(tw, r)
+		tw.finish()
+		tracker.Finish(finishError(r.Context()))
 	}
 }
 
@@ -366,16 +403,17 @@ func (p *OllamaProxy) Stop() error {
 }
 
 // rewriteRequestBody normalizes model names in request bodies for the endpoints
-// that carry them, replacing r.Body with the processed bytes when changed.
-func rewriteRequestBody(r *http.Request) {
+// that carry them, replacing r.Body with the processed bytes when changed. It
+// returns the body as forwarded, or nil when the body wasn't read.
+func rewriteRequestBody(r *http.Request) []byte {
 	if r.Body == nil {
-		return
+		return nil
 	}
 	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
-		return
+		return nil
 	}
 	if !hasPathSuffix(r.URL.Path, modelBodyPaths) {
-		return
+		return nil
 	}
 
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -386,19 +424,20 @@ func rewriteRequestBody(r *http.Request) {
 		// leaving the original larger length would make the transport abort with a
 		// ContentLength/body mismatch instead of forwarding.
 		setRequestBody(r, bodyBytes)
-		return
+		return bodyBytes
 	}
 
 	processed, modified := processModelBody(r.URL.Path, bodyBytes)
 	if !modified {
 		setRequestBody(r, bodyBytes)
-		return
+		return bodyBytes
 	}
 
 	if Verbose.Load() {
 		log.Printf("Final forwarded body for %s: %s", r.URL.Path, processed)
 	}
 	setRequestBody(r, processed)
+	return processed
 }
 
 // setRequestBody replaces r.Body with b, keeping ContentLength and the
@@ -498,6 +537,7 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // logExchange logs a single request/response line, suppressing HEAD unless Verbose.
 func (t *customTransport) logExchange(req *http.Request, resp *http.Response) {
+	trackerFrom(req.Context()).SetUpstreamPath(req.URL.Path)
 	if req.Method == http.MethodHead && !Verbose.Load() {
 		return
 	}
@@ -542,6 +582,7 @@ func (t *customTransport) handleMissingModel(req *http.Request, resp *http.Respo
 	}
 
 	log.Printf("Successfully pulled model %q. Retrying original request...", modelName)
+	trackerFrom(req.Context()).SetNote("auto-pulled model")
 	retryReq, err := http.NewRequestWithContext(req.Context(), req.Method, req.URL.String(), bytes.NewReader(originalBody))
 	if err != nil {
 		log.Printf("Error recreating original request: %v", err)
