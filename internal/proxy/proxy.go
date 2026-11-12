@@ -120,6 +120,8 @@ type OllamaProxy struct {
 	// keySource, when set, supplies the key per request instead of apiKey
 	// (a gateway login that can change while serve runs).
 	keySource func() (string, error)
+	// onUnauthorized, when set, is told which key the upstream answered 401.
+	onUnauthorized func(key string)
 	// allowedOrigins are the browser origins (besides loopback ones) that may
 	// use the proxy while it adds a key; "*" allows any.
 	allowedOrigins []string
@@ -180,6 +182,10 @@ func (p *OllamaProxy) SetAllowedOrigins(origins []string) { p.allowedOrigins = o
 // addsKey reports whether the proxy authenticates upstream on the caller's
 // behalf, which makes it worth protecting from web pages.
 func (p *OllamaProxy) addsKey() bool { return p.apiKey != "" || p.keySource != nil }
+
+// SetOnUnauthorized has the proxy call f with the key the upstream refused
+// with 401, e.g. to explain an expired login.
+func (p *OllamaProxy) SetOnUnauthorized(f func(key string)) { p.onUnauthorized = f }
 
 // key returns the upstream key to use now.
 func (p *OllamaProxy) key() (string, error) {
@@ -290,6 +296,13 @@ func (p *OllamaProxy) newReverseProxy() *httputil.ReverseProxy {
 	}
 
 	proxy.Transport = newCustomTransport(defaultMaxRedirects)
+	proxy.ModifyResponse = func(res *http.Response) error {
+		if res.StatusCode == http.StatusUnauthorized && p.onUnauthorized != nil {
+			key, _ := res.Request.Context().Value(apiKeyKey{}).(string)
+			p.onUnauthorized(key)
+		}
+		return nil
+	}
 	return proxy
 }
 

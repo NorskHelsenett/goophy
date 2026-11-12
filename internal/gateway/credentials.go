@@ -117,7 +117,9 @@ func Load() (Credentials, error) {
 	return c, nil
 }
 
-// Expired reports whether the token has passed its expiry.
+// Expired reports whether the token has passed the expiry stored with it.
+// The gateway extends a token's expiry as it is used, so a stored expiry in
+// the past means "ask the gateway", not "expired".
 func (c Credentials) Expired() bool {
 	return c.ExpiresAt != nil && time.Now().After(*c.ExpiresAt)
 }

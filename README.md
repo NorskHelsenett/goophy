@@ -55,8 +55,9 @@ goophy logout    # revokes the token and forgets it
 `goophy login` opens `https://gw.chat.nhn.no` (override with `--gateway` or
 `GOOPHY_GATEWAY`). When no browser can be opened (over SSH, or with
 `--no-browser`) it prints a link to open on any machine, and asks for the code
-that page shows. The token lasts 90 days and is listed under Tokens in the
-gateway's web interface. An explicit `API_ENDPOINT` or `API_KEY` always wins
+that page shows. The login expires after 7 days unused, and 30 days after you
+logged in at the latest; it is listed under Tokens in the gateway's web
+interface. An explicit `API_ENDPOINT` or `API_KEY` always wins
 over the login.
 
 A running `goophy serve` follows `goophy login` and `goophy logout` from other

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -55,7 +56,7 @@ func loginCommand(args []string) {
 	}
 	fmt.Printf("Logged in to %s as %s.\n", c.Gateway, who)
 	if c.ExpiresAt != nil {
-		fmt.Printf("The login lasts until %s; run 'goophy login' again then.\n", c.ExpiresAt.Local().Format("2 Jan 2006"))
+		fmt.Printf("The login is valid until at least %s; using it can extend that.\n", c.ExpiresAt.Local().Format("2 Jan 2006"))
 	}
 	fmt.Println("Run 'goophy serve' to proxy to the gateway, or 'goophy usage' to see what you have used.")
 }
@@ -215,9 +216,30 @@ func gatewayLogin(endpointFlag, ollamaEndpointFlag, apiKeyFlag string) (gateway.
 		return gateway.Credentials{}, false
 	}
 	if c.Expired() {
-		fatal(errors.New("your gateway login has expired; run 'goophy login' (or set API_ENDPOINT to use another upstream)"))
+		c = recheckLogin(c)
 	}
 	return c, true
+}
+
+// recheckLogin asks the gateway about a login whose stored expiry has
+// passed: the gateway extends it as it is used, so it may well be alive.
+// A live login gets its new expiry stored; a refused one is fatal.
+func recheckLogin(c gateway.Credentials) gateway.Credentials {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	me, err := gateway.WhoAmI(ctx, c)
+	var se *gateway.StatusError
+	switch {
+	case errors.As(err, &se) && se.Status == http.StatusUnauthorized:
+		fatal(errors.New("your gateway login has expired; run 'goophy login' (or set API_ENDPOINT to use another upstream)"))
+	case err != nil:
+		// Cannot tell now; let the gateway decide per request.
+		fmt.Fprintf(os.Stderr, "Warning: could not check your gateway login: %v\n", err)
+	default:
+		c.ExpiresAt = me.Token.ExpiresAt
+		_ = gateway.Save(c)
+	}
+	return c
 }
 
 func fatal(err error) {

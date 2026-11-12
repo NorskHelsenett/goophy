@@ -269,12 +269,13 @@ func TestLiveFollowsLoginAndLogout(t *testing.T) {
 		t.Fatalf("after login to another gateway, Token() err = %v; want restart hint", err)
 	}
 
-	// Expired.
+	// A stored expiry in the past is not trusted: the gateway extends logins
+	// as they are used, so it decides.
 	past := time.Now().Add(-time.Hour)
-	if err := Save(Credentials{Gateway: gw, Token: "expired-token", ExpiresAt: &past}); err != nil {
+	if err := Save(Credentials{Gateway: gw, Token: "stale-expiry", ExpiresAt: &past}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := token(); err == nil || !strings.Contains(err.Error(), "expired") {
-		t.Fatalf("expired login: Token() err = %v; want expired", err)
+	if tok, err := token(); tok != "stale-expiry" || err != nil {
+		t.Fatalf("stale stored expiry: Token() = %q, %v; want the token", tok, err)
 	}
 }

@@ -366,6 +366,7 @@ func serveCommand(args []string) {
 			log.Fatalf("Failed to watch the goophy login: %v", err)
 		}
 		ollamaProxy.SetKeySource(live.Token)
+		ollamaProxy.SetOnUnauthorized(live.Refused)
 	}
 	if origins := resolve("", "GOOPHY_ALLOWED_ORIGINS", ""); origins != "" {
 		var list []string

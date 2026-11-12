@@ -25,6 +25,7 @@ type Live struct {
 	file    os.FileInfo // the credentials file last read; nil if there was none
 	cur     Credentials
 	err     error
+	refused string // the token the gateway last refused, so that is logged once
 }
 
 // NewLive starts from the credentials serve was started with; serve keeps
@@ -53,10 +54,22 @@ func (l *Live) Token() (string, error) {
 	if l.err != nil {
 		return "", l.err
 	}
-	if l.cur.Expired() {
-		return "", errors.New("your goophy login has expired; run 'goophy login'")
-	}
+	// No local expiry check: the gateway moves the expiry forward with each
+	// use, so the expiresAt stored at login goes stale. The gateway decides,
+	// and Refused explains its 401.
 	return l.cur.Token, nil
+}
+
+// Refused is told when the gateway answered 401 to token. It logs, once per
+// token, what to do about it.
+func (l *Live) Refused(token string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if token == "" || token == l.refused {
+		return
+	}
+	l.refused = token
+	log.Print("The gateway refused your goophy login (expired after a week unused, or revoked); run 'goophy login'")
 }
 
 // reload re-reads the credentials when the file changed. Save writes a new

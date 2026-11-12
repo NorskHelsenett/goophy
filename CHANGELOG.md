@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   other shells. Before, a new login revoked the token serve was using and
   every request failed until serve was restarted. While logged out or expired
   it answers `401` with a message saying to run `goophy login`.
+- goophy no longer trusts the expiry stored at login: the gateway extends a
+  login as it is used (7 days unused, 30 days at most), so the stored date
+  goes stale. `serve` asks the gateway about a login past its stored expiry
+  and stores the new one, and logs what to do when the gateway answers `401`.
 - `GOOPHY_ALLOWED_ORIGINS`: web origins that may call goophy while it adds a
   key.
 

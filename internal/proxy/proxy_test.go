@@ -556,6 +556,18 @@ func TestProxyKeySource(t *testing.T) {
 		t.Errorf("after a new login, Authorization = %q, want Bearer second", gotAuth)
 	}
 
+	// The upstream refusing the key is reported with that key.
+	var refused string
+	p.SetOnUnauthorized(func(k string) { refused = k })
+	status := http.StatusUnauthorized
+	upstream.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(status)
+	})
+	if rec := send(); rec.Code != http.StatusUnauthorized || refused != "second" {
+		t.Errorf("upstream 401: got %d, reported %q; want 401 reported for second", rec.Code, refused)
+	}
+
 	keyErr = errors.New("goophy is logged out; run 'goophy login'")
 	rec := send()
 	if gotAuth != "" {
