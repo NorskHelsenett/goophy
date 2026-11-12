@@ -64,6 +64,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   do not move the container image's `latest` tag, so previews are not
   picked up by the self-updater or `:latest`.
 
+### Fixed
+- When an env file (`.env` or `--env-file`) sets a variable more than once,
+  the last assignment now wins, as in a shell, docker compose and other
+  dotenv loaders. goophy used the first one, so e.g. an old `API_KEY` near
+  the top of `.env` silently beat the one below it. Variables already set in
+  the environment still take precedence over the file.
+
 ## [0.2.4] - 2026-11-11
 
 ### Added

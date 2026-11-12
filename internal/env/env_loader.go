@@ -67,7 +67,11 @@ func loadEnvFile(filePath string, reportError bool) error {
 	}
 	defer file.Close()
 
-	// Read line by line
+	// Read the whole file before touching the environment, so that a variable
+	// assigned more than once takes its last value (as in a shell, docker
+	// compose and other dotenv loaders) rather than its first.
+	values := map[string]string{}
+	var order []string
 	scanner := bufio.NewScanner(file)
 	lineNum := 0
 
@@ -95,15 +99,22 @@ func loadEnvFile(filePath string, reportError bool) error {
 		// Remove quotes if present
 		value = strings.Trim(value, `"'`)
 
-		// Only set if not already in environment - this ensures OS env variables take precedence
-		if os.Getenv(key) == "" {
-			os.Setenv(key, value)
+		if _, seen := values[key]; !seen {
+			order = append(order, key)
 		}
+		values[key] = value
 	}
 
 	if err := scanner.Err(); err != nil && reportError {
 		return err
 	}
 
+	// Only set variables that aren't already in the environment, so OS
+	// variables (and an earlier --env-file) take precedence over this file.
+	for _, key := range order {
+		if os.Getenv(key) == "" {
+			os.Setenv(key, values[key])
+		}
+	}
 	return nil
 }
