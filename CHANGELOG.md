@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and stores the new one, and logs what to do when the gateway answers `401`.
 - `GOOPHY_ALLOWED_ORIGINS`: web origins that may call goophy while it adds a
   key.
+- Interactive dashboard for `goophy serve` in a terminal: live session stats
+  (requests, errors, tokens, tok/s), token usage over time and per client
+  (including prompt-cache hits), a request inspector, per-model usage
+  (including embedding and rerank models) and a filterable log view. Disable
+  with `--no-tui` or `NO_TUI=true`; it is skipped automatically when not
+  attached to a terminal, keeping the plain log output. In dashboard mode
+  goophy asks OpenAI-compatible upstreams for streamed token usage
+  (`stream_options.include_usage`) when the client doesn't set it.
 
 ### Security
 - While goophy adds a key (`API_KEY` or the login), it no longer answers any

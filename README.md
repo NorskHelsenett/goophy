@@ -120,6 +120,32 @@ Auto-pull disabled: vLLM upstreams don't support /api/pull
 Run with `VERBOSE=true` to also log each path rewrite
 (`Routed /chat/completions -> /api/chat/completions for Open WebUI upstream`).
 
+## Dashboard
+
+When `goophy serve` runs in an interactive terminal it shows a live dashboard
+instead of streaming logs. Switch tabs with `1`–`5`, `Tab` or the arrow keys;
+`q` quits and prints a short session summary.
+
+| Tab           | Shows                                                                     |
+| ------------- | ------------------------------------------------------------------------- |
+| **Dashboard** | Requests, errors, prompt/completion tokens, live tok/s, in-flight streams |
+| **Usage**     | Session token totals (incl. prompt-cache hits when reported), tokens per minute, usage by client (User-Agent) and the largest prompts |
+| **Requests**  | Every request with status, model, time to first byte, duration and tokens; `Enter` toggles details (path before/after routing, client) |
+| **Models**    | Per-model requests, tokens, average time to first byte and tok/s          |
+| **Logs**      | The usual log output, scrollable, with `/` to filter                      |
+
+Statistics are kept in memory for the session only. Token counts come from the
+upstream's `usage` (OpenAI) or `prompt_eval_count`/`eval_count` (Ollama). To get
+them for streamed OpenAI-style requests, goophy adds
+`stream_options: {"include_usage": true}` when the client didn't set
+`stream_options`, and lets its own HTTP client negotiate compression with the
+upstream for generation endpoints. When usage isn't reported, output tokens are
+estimated from streamed chunks and shown with a `~`.
+
+The dashboard is skipped — and goophy prints logs exactly as before, with none
+of the above request changes — when stdin/stdout isn't a terminal (Docker,
+systemd/launchd, piped output), with `--no-tui`, or with `NO_TUI=true`.
+
 ## Usage
 
 ### Get Started
