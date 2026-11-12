@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -29,16 +30,67 @@ var ErrNotLoggedIn = errors.New("not logged in; run 'goophy login'")
 
 // CredentialsPath is where the credentials are stored. GOOPHY_CONFIG_DIR
 // overrides the directory (tests, several accounts).
+//
+// On Windows that is %LocalAppData%, not the %AppData% os.UserConfigDir
+// gives: %AppData% is the roaming profile, which domains copy to every PC the
+// user signs in to and often redirect to a file share. The token must stay on
+// the machine it was issued to.
 func CredentialsPath() (string, error) {
 	dir := os.Getenv("GOOPHY_CONFIG_DIR")
 	if dir == "" {
-		base, err := os.UserConfigDir()
+		base, err := configBase()
 		if err != nil {
 			return "", err
 		}
 		dir = filepath.Join(base, "goophy")
 	}
 	return filepath.Join(dir, "credentials.json"), nil
+}
+
+func configBase() (string, error) {
+	if runtime.GOOS == "windows" {
+		if d := os.Getenv("LOCALAPPDATA"); d != "" {
+			return d, nil
+		}
+		return "", errors.New("%LocalAppData% is not set")
+	}
+	return os.UserConfigDir()
+}
+
+// legacyPath is where goophy 0.3.0-rc.1 and rc.2 stored the credentials on
+// Windows (the roaming %AppData%); "" elsewhere.
+func legacyPath() string {
+	if runtime.GOOS != "windows" || os.Getenv("GOOPHY_CONFIG_DIR") != "" {
+		return ""
+	}
+	d := os.Getenv("APPDATA")
+	if d == "" {
+		return ""
+	}
+	return filepath.Join(d, "goophy", "credentials.json")
+}
+
+// migrateLegacy moves credentials from the roaming profile to the local one,
+// so the token stops travelling with the profile. Best effort.
+func migrateLegacy(to string) {
+	from := legacyPath()
+	if from == "" || from == to {
+		return
+	}
+	b, err := os.ReadFile(from)
+	if err != nil {
+		return
+	}
+	var c Credentials
+	if json.Unmarshal(b, &c) == nil && c.Token != "" {
+		if _, err := os.Stat(to); errors.Is(err, os.ErrNotExist) {
+			if Save(c) != nil {
+				return
+			}
+		}
+	}
+	_ = os.Remove(from)
+	_ = os.Remove(filepath.Dir(from)) // only if empty
 }
 
 // Load reads the stored credentials; ErrNotLoggedIn if there are none.
@@ -48,6 +100,7 @@ func Load() (Credentials, error) {
 	if err != nil {
 		return c, err
 	}
+	migrateLegacy(p)
 	b, err := os.ReadFile(p)
 	if errors.Is(err, os.ErrNotExist) {
 		return c, ErrNotLoggedIn
@@ -110,6 +163,9 @@ func Remove() error {
 	}
 	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
+	}
+	if l := legacyPath(); l != "" {
+		_ = os.Remove(l)
 	}
 	return nil
 }

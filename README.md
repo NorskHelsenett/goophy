@@ -20,6 +20,7 @@ environment variable are both set, the flag wins.
 | `PORT`                  | `--port`          | `22434`                  | Port to run the proxy server on                   |
 | `API_ENDPOINT`          | `--api-endpoint`  | `http://localhost:11434` | Target API endpoint to forward requests to        |
 | `API_KEY`               | `--api-key`       | _(empty)_                | API key used for authentication                   |
+| `GOOPHY_ALLOWED_ORIGINS` |               | _(empty)_                | Comma-separated web origins that may call goophy while it adds a key (see [Browsers](#browsers)) |
 | `DISABLE_AUTO_UPDATE`   | —                 | `false`                  | Disable auto-update                               |
 | `UPDATE_CHECK_INTERVAL` | —                 | `24h`                    | How often to check for updates                    |
 
@@ -57,6 +58,25 @@ goophy logout    # revokes the token and forgets it
 that page shows. The token lasts 90 days and is listed under Tokens in the
 gateway's web interface. An explicit `API_ENDPOINT` or `API_KEY` always wins
 over the login.
+
+A running `goophy serve` follows `goophy login` and `goophy logout` from other
+shells: after a new login it uses the new token, and while logged out it
+answers `401` with a message saying to run `goophy login`. The token is stored
+in `credentials.json`, readable only by you, in `~/Library/Application
+Support/goophy` (macOS), `~/.config/goophy` (Linux) or
+`%LocalAppData%\goophy` (Windows; kept out of the roaming profile so it does
+not follow you to other PCs).
+
+### Browsers
+
+While goophy adds a key (`API_KEY` or the login), web pages could otherwise
+spend it through `http://127.0.0.1:22434`. So goophy then serves browser
+requests only from pages on `localhost` and the origins listed in
+`GOOPHY_ALLOWED_ORIGINS` (e.g. `https://app.example`, or `*` for any), and on
+a loopback address only answers to `localhost`-style `Host` names (and
+`host.docker.internal`), which blocks DNS rebinding. Programs such as curl,
+SDKs and editors send no `Origin` and are not affected. Without a key, any
+origin is allowed, as before.
 
 ## Supported upstreams
 

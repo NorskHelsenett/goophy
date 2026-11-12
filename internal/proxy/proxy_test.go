@@ -519,3 +519,106 @@ func TestBarePathBodyIsNormalized(t *testing.T) {
 		t.Errorf("upstream body = %s, want model llama3", gotBody)
 	}
 }
+
+func TestProxyKeySource(t *testing.T) {
+	var gotAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	p, err := NewOllamaProxy("127.0.0.1", "0", upstream.URL, "", UpstreamUnknown)
+	if err != nil {
+		t.Fatalf("NewOllamaProxy: %v", err)
+	}
+	key, keyErr := "first", error(nil)
+	p.SetKeySource(func() (string, error) { return key, keyErr })
+	h := p.handle(p.newReverseProxy())
+
+	send := func() *httptest.ResponseRecorder {
+		gotAuth = ""
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		req.Host = "127.0.0.1:22434"
+		h(rec, req)
+		return rec
+	}
+
+	send()
+	if gotAuth != "Bearer first" {
+		t.Errorf("Authorization = %q, want Bearer first", gotAuth)
+	}
+
+	key = "second" // a new login in another shell
+	send()
+	if gotAuth != "Bearer second" {
+		t.Errorf("after a new login, Authorization = %q, want Bearer second", gotAuth)
+	}
+
+	keyErr = errors.New("goophy is logged out; run 'goophy login'")
+	rec := send()
+	if gotAuth != "" {
+		t.Errorf("request was forwarded without a usable key")
+	}
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "goophy login") {
+		t.Errorf("got %d %q, want 401 telling the user to run goophy login", rec.Code, rec.Body.String())
+	}
+}
+
+func TestBrowserGuard(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	newProxy := func(key string) http.HandlerFunc {
+		p, err := NewOllamaProxy("127.0.0.1", "0", upstream.URL, key, UpstreamUnknown)
+		if err != nil {
+			t.Fatalf("NewOllamaProxy: %v", err)
+		}
+		p.SetAllowedOrigins([]string{"https://app.example"})
+		return p.handle(p.newReverseProxy())
+	}
+	withKey, noKey := newProxy("secret"), newProxy("")
+
+	tests := []struct {
+		name     string
+		h        http.HandlerFunc
+		method   string
+		host     string
+		headers  map[string]string
+		want     int
+		wantACAO string
+	}{
+		{"program, no origin", withKey, "POST", "127.0.0.1:22434", nil, 200, ""},
+		{"localhost host", withKey, "POST", "localhost:22434", nil, 200, ""},
+		{"docker host", withKey, "POST", "host.docker.internal:22434", nil, 200, ""},
+		{"dns rebinding", withKey, "POST", "attacker.example:22434", nil, 403, ""},
+		{"cross-site page", withKey, "POST", "127.0.0.1:22434", map[string]string{"Origin": "https://evil.example"}, 403, ""},
+		{"cross-site no-cors", withKey, "POST", "127.0.0.1:22434", map[string]string{"Sec-Fetch-Site": "cross-site"}, 403, ""},
+		{"cross-site preflight", withKey, "OPTIONS", "127.0.0.1:22434", map[string]string{"Origin": "https://evil.example"}, 403, ""},
+		{"null origin", withKey, "POST", "127.0.0.1:22434", map[string]string{"Origin": "null"}, 403, ""},
+		{"allowed origin", withKey, "POST", "127.0.0.1:22434", map[string]string{"Origin": "https://app.example"}, 200, "https://app.example"},
+		{"allowed preflight", withKey, "OPTIONS", "127.0.0.1:22434", map[string]string{"Origin": "https://app.example"}, 200, "https://app.example"},
+		{"local page", withKey, "POST", "127.0.0.1:22434", map[string]string{"Origin": "http://localhost:3000"}, 200, "http://localhost:3000"},
+		{"no key: any page", noKey, "POST", "attacker.example", map[string]string{"Origin": "https://evil.example"}, 200, "*"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/v1/chat/completions", nil)
+			req.Host = tt.host
+			for k, v := range tt.headers {
+				req.Header.Set(k, v)
+			}
+			rec := httptest.NewRecorder()
+			tt.h(rec, req)
+			if rec.Code != tt.want {
+				t.Errorf("status = %d, want %d (%s)", rec.Code, tt.want, rec.Body.String())
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Origin"); got != tt.wantACAO {
+				t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, tt.wantACAO)
+			}
+		})
+	}
+}

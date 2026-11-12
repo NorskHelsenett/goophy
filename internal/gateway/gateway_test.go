@@ -215,3 +215,66 @@ func TestNormalizeURL(t *testing.T) {
 		t.Error("ftp accepted")
 	}
 }
+
+func TestLiveFollowsLoginAndLogout(t *testing.T) {
+	t.Setenv("GOOPHY_CONFIG_DIR", t.TempDir())
+	gw := "https://gw.example"
+	if err := Save(Credentials{Gateway: gw, Token: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := Load()
+	l, err := NewLive(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := func() (string, error) {
+		l.mu.Lock()
+		l.checked = time.Time{} // skip the once-a-second throttle
+		l.mu.Unlock()
+		return l.Token()
+	}
+	if tok, err := token(); tok != "old" || err != nil {
+		t.Fatalf("Token() = %q, %v; want old", tok, err)
+	}
+
+	// goophy login in another shell.
+	if err := Save(Credentials{Gateway: gw, Token: "new-token"}); err != nil {
+		t.Fatal(err)
+	}
+	if tok, err := token(); tok != "new-token" || err != nil {
+		t.Fatalf("after login, Token() = %q, %v; want new-token", tok, err)
+	}
+
+	// goophy logout.
+	if err := Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := token(); err == nil || !strings.Contains(err.Error(), "goophy login") {
+		t.Fatalf("after logout, Token() err = %v; want a hint to log in", err)
+	}
+
+	// Logged in again.
+	if err := Save(Credentials{Gateway: gw, Token: "third"}); err != nil {
+		t.Fatal(err)
+	}
+	if tok, err := token(); tok != "third" || err != nil {
+		t.Fatalf("after logging in again, Token() = %q, %v; want third", tok, err)
+	}
+
+	// Logged in to another gateway: serve cannot switch target.
+	if err := Save(Credentials{Gateway: "https://other.example", Token: "other-gateway"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := token(); err == nil || !strings.Contains(err.Error(), "restart") {
+		t.Fatalf("after login to another gateway, Token() err = %v; want restart hint", err)
+	}
+
+	// Expired.
+	past := time.Now().Add(-time.Hour)
+	if err := Save(Credentials{Gateway: gw, Token: "expired-token", ExpiresAt: &past}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := token(); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expired login: Token() err = %v; want expired", err)
+	}
+}

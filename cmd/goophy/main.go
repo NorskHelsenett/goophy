@@ -57,6 +57,8 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
 	fmt.Fprintf(os.Stderr, "  API_ENDPOINT     Target API endpoint to forward requests to (default: http://localhost:11434)\n")
 	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n")
+	fmt.Fprintf(os.Stderr, "  GOOPHY_ALLOWED_ORIGINS  Web pages (e.g. https://app.example) that may call goophy while it adds\n")
+	fmt.Fprintf(os.Stderr, "                   an API key or the login; pages on localhost always may (default: none)\n")
 	fmt.Fprintf(os.Stderr, "  \n")
 	fmt.Fprintf(os.Stderr, "  Environment variables can also be set in a .env file in the current directory\n")
 	fmt.Fprintf(os.Stderr, "  or specified using the --env-file flag.\n\n")
@@ -89,6 +91,8 @@ func printServeHelp() {
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
 	fmt.Fprintf(os.Stderr, "  API_ENDPOINT     Target API endpoint to forward requests to (default: http://localhost:11434)\n")
 	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n")
+	fmt.Fprintf(os.Stderr, "  GOOPHY_ALLOWED_ORIGINS  Web pages (e.g. https://app.example) that may call goophy while it adds\n")
+	fmt.Fprintf(os.Stderr, "                   an API key or the login; pages on localhost always may (default: none)\n")
 	fmt.Fprintf(os.Stderr, "  \n")
 	fmt.Fprintf(os.Stderr, "  Environment variables can also be set in a .env file in the current directory\n")
 	fmt.Fprintf(os.Stderr, "  or specified using the --env-file flag.\n\n")
@@ -353,6 +357,24 @@ func serveCommand(args []string) {
 	ollamaProxy, err := proxy.NewOllamaProxy(host, port, targetURL, apiKey, upstream)
 	if err != nil {
 		log.Fatalf("Failed to create proxy: %v", err)
+	}
+	if useLogin {
+		// Follow 'goophy login' / 'goophy logout' run in another shell: a new
+		// login revokes the token this serve started with.
+		live, err := gateway.NewLive(login)
+		if err != nil {
+			log.Fatalf("Failed to watch the goophy login: %v", err)
+		}
+		ollamaProxy.SetKeySource(live.Token)
+	}
+	if origins := resolve("", "GOOPHY_ALLOWED_ORIGINS", ""); origins != "" {
+		var list []string
+		for _, o := range strings.Split(origins, ",") {
+			if o = strings.TrimSpace(o); o != "" {
+				list = append(list, o)
+			}
+		}
+		ollamaProxy.SetAllowedOrigins(list)
 	}
 
 	// Start the server (blocks until the context is cancelled or the server fails).
