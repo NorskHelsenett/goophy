@@ -189,13 +189,30 @@ func count(n int64) string {
 // gatewayLogin returns the stored login to proxy with when serve is given no
 // upstream and no key of its own.
 func gatewayLogin(endpointFlag, ollamaEndpointFlag, apiKeyFlag string) (gateway.Credentials, bool) {
-	if endpointFlag != "" || ollamaEndpointFlag != "" || apiKeyFlag != "" ||
-		env.GetEnv("API_ENDPOINT", "") != "" || env.GetEnv("OLLAMA_ENDPOINT", "") != "" || env.GetEnv("API_KEY", "") != "" {
-		return gateway.Credentials{}, false
-	}
 	c, err := gateway.Load()
 	if err != nil {
 		return c, false
+	}
+	var overrides []string
+	for _, o := range []struct{ flag, envKey, name string }{
+		{endpointFlag, "API_ENDPOINT", "--api-endpoint"},
+		{ollamaEndpointFlag, "OLLAMA_ENDPOINT", "--ollama-endpoint"},
+		{apiKeyFlag, "API_KEY", "--api-key"},
+	} {
+		switch {
+		case o.flag != "":
+			overrides = append(overrides, o.name)
+		case env.GetEnv(o.envKey, "") != "":
+			overrides = append(overrides, o.envKey)
+		}
+	}
+	if len(overrides) > 0 {
+		// A forgotten .env from before the login is easy to miss: it wins,
+		// and its stale key gets every request refused.
+		fmt.Fprintf(os.Stderr, "Warning: not using your goophy login for %s, because %s %s set (environment, .env or flag).\n",
+			c.Gateway, strings.Join(overrides, ", "), map[bool]string{true: "is", false: "are"}[len(overrides) == 1])
+		fmt.Fprintln(os.Stderr, "         Remove them to proxy with the login.")
+		return gateway.Credentials{}, false
 	}
 	if c.Expired() {
 		fatal(errors.New("your gateway login has expired; run 'goophy login' (or set API_ENDPOINT to use another upstream)"))

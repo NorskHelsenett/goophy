@@ -38,7 +38,7 @@ func displayVersion() string {
 }
 
 func printGlobalHelp() {
-	fmt.Fprintf(os.Stderr, "Goophy - Ollama API Proxy, version %s\n\n", displayVersion())
+	fmt.Fprintf(os.Stderr, "Goophy - LLM API proxy, version %s\n\n", displayVersion())
 	fmt.Fprintf(os.Stderr, "Usage: goophy [options] [command]\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
 	fmt.Fprintf(os.Stderr, "  -h, --help            Show this help message and exit\n")
@@ -46,7 +46,7 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "  --env-file string     Path to an env file to load configuration from\n\n")
 
 	fmt.Fprintf(os.Stderr, "Commands:\n")
-	fmt.Fprintf(os.Stderr, "  serve          Start the Ollama proxy server\n")
+	fmt.Fprintf(os.Stderr, "  serve          Start the proxy server\n")
 	fmt.Fprintf(os.Stderr, "  login          Sign in to the LLM gateway (%s) in the browser\n", gateway.DefaultURL)
 	fmt.Fprintf(os.Stderr, "  logout         Revoke the gateway login and forget it\n")
 	fmt.Fprintf(os.Stderr, "  usage          Show your gateway usage\n")
@@ -62,7 +62,7 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "  or specified using the --env-file flag.\n\n")
 
 	fmt.Fprintf(os.Stderr, "Description:\n")
-	fmt.Fprintf(os.Stderr, "  Goophy is a reverse proxy for Ollama API that provides additional features:\n")
+	fmt.Fprintf(os.Stderr, "  Goophy is a reverse proxy for Ollama, vLLM, Open WebUI and the NHN LLM gateway that adds:\n")
 	fmt.Fprintf(os.Stderr, "   - Automatic updates\n")
 	fmt.Fprintf(os.Stderr, "   - API key authentication\n")
 	fmt.Fprintf(os.Stderr, "   - CORS support for browser applications\n\n")
@@ -72,7 +72,7 @@ func printGlobalHelp() {
 }
 
 func printServeHelp() {
-	fmt.Fprintf(os.Stderr, "Goophy - Ollama API Proxy, version %s\n\n", displayVersion())
+	fmt.Fprintf(os.Stderr, "Goophy - LLM API proxy, version %s\n\n", displayVersion())
 	fmt.Fprintf(os.Stderr, "Usage: goophy serve [options]\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
 	fmt.Fprintf(os.Stderr, "  -h, --help                Show this help message and exit\n")
@@ -98,7 +98,7 @@ func printServeHelp() {
 }
 
 func printUpdateHelp() {
-	fmt.Fprintf(os.Stderr, "Goophy - Ollama API Proxy, version %s\n\n", displayVersion())
+	fmt.Fprintf(os.Stderr, "Goophy - LLM API proxy, version %s\n\n", displayVersion())
 	fmt.Fprintf(os.Stderr, "Usage: goophy update [options]\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
 	fmt.Fprintf(os.Stderr, "  -h, --help            Show this help message and exit\n")

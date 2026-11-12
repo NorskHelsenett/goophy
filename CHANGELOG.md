@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`--listen-all`), and refuses an expired login.
 
 ### Changed
+- `goophy serve` warns when `API_ENDPOINT`, `OLLAMA_ENDPOINT` or `API_KEY`
+  (environment, `.env` or flag) override a stored login, naming them: a
+  forgotten `.env` with an old key otherwise gets every request refused.
+- The updater only moves forward: it never offers an older version. A
+  prerelease build (e.g. `0.3.0-rc.1`) follows prereleases too, and gets the
+  stable release once it is out; stable builds still only see stable releases.
+- Logs and help say "goophy proxy" rather than "Ollama proxy": goophy also
+  fronts vLLM, Open WebUI and the gateway.
 - Prerelease tags (e.g. `v0.3.0-rc.1`) are published as GitHub prereleases and
   do not move the container image's `latest` tag, so previews are not
   picked up by the self-updater or `:latest`.

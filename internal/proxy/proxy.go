@@ -207,7 +207,7 @@ const shutdownTimeout = 10 * time.Second
 // Start starts the proxy server and blocks until ctx is cancelled or the server
 // stops on its own. On cancellation it shuts down gracefully and returns nil.
 func (p *OllamaProxy) Start(ctx context.Context) error {
-	log.Printf("Starting Ollama proxy server on port %s", p.port)
+	log.Printf("Starting goophy proxy server on port %s", p.port)
 	log.Printf("Forwarding requests to: %s", p.targetURL)
 	if p.apiKey != "" {
 		log.Print("API Key authentication enabled")
@@ -222,7 +222,7 @@ func (p *OllamaProxy) Start(ctx context.Context) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- p.server.ListenAndServe() }()
 
-	log.Printf("Ollama proxy server listening on %s", addr)
+	log.Printf("goophy proxy server listening on %s", addr)
 	if p.host == "127.0.0.1" || p.host == "localhost" || p.host == "::1" {
 		log.Print("Only local (loopback) connections are accepted; set HOST=0.0.0.0 (or --host 0.0.0.0) to allow external access")
 	}
