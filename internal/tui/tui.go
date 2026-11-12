@@ -243,7 +243,7 @@ func fitHeight(s string, h, w int) string {
 
 func (m Model) header() string {
 	s := m.snap
-	left := sBrand.Render(" goophy ") + " " + sDim.Render(s.Info.Version)
+	left := sBrand.Render(" goophy ") + " " + sDim.Render(s.Info.Version) + " " + sWarn.Render("preview")
 
 	dot, upStyle := "●", sOK
 	switch {

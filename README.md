@@ -120,10 +120,10 @@ Auto-pull disabled: vLLM upstreams don't support /api/pull
 Run with `VERBOSE=true` to also log each path rewrite
 (`Routed /chat/completions -> /api/chat/completions for Open WebUI upstream`).
 
-## Dashboard
+## Dashboard (preview)
 
-When `goophy serve` runs in an interactive terminal it shows a live dashboard
-instead of streaming logs. Switch tabs with `1`–`5`, `Tab` or the arrow keys;
+`goophy serve --tui` (or `GOOPHY_TUI=true`) shows a live dashboard in the
+terminal instead of streaming logs. It is a preview and off by default. Switch tabs with `1`–`5`, `Tab` or the arrow keys;
 `q` quits and prints a short session summary.
 
 | Tab           | Shows                                                                     |
@@ -142,9 +142,9 @@ them for streamed OpenAI-style requests, goophy adds
 upstream for generation endpoints. When usage isn't reported, output tokens are
 estimated from streamed chunks and shown with a `~`.
 
-The dashboard is skipped — and goophy prints logs exactly as before, with none
-of the above request changes — when stdin/stdout isn't a terminal (Docker,
-systemd/launchd, piped output), with `--no-tui`, or with `NO_TUI=true`.
+Without `--tui` goophy prints logs exactly as before, with none of the above
+request changes. With `--tui` but no interactive terminal (Docker,
+systemd/launchd, piped output) it says so and prints logs instead.
 
 ## Usage
 

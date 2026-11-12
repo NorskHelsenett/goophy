@@ -64,7 +64,7 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n")
 	fmt.Fprintf(os.Stderr, "  GOOPHY_ALLOWED_ORIGINS  Web pages (e.g. https://app.example) that may call goophy while it adds\n")
 	fmt.Fprintf(os.Stderr, "                   an API key or the login; pages on localhost always may (default: none)\n")
-	fmt.Fprintf(os.Stderr, "  NO_TUI           Set to true to print logs instead of the dashboard\n")
+	fmt.Fprintf(os.Stderr, "  GOOPHY_TUI       Set to true to show the interactive dashboard (preview), like --tui\n")
 	fmt.Fprintf(os.Stderr, "  \n")
 	fmt.Fprintf(os.Stderr, "  Environment variables can also be set in a .env file in the current directory\n")
 	fmt.Fprintf(os.Stderr, "  or specified using the --env-file flag.\n\n")
@@ -90,7 +90,7 @@ func printServeHelp() {
 	fmt.Fprintf(os.Stderr, "  --api-endpoint string     Target API endpoint to forward requests to (default: http://localhost:11434)\n")
 	fmt.Fprintf(os.Stderr, "  --api-key string          API key for authentication (default: none)\n")
 	fmt.Fprintf(os.Stderr, "  --listen-all              Listen on all interfaces (shorthand for --host 0.0.0.0)\n")
-	fmt.Fprintf(os.Stderr, "  --no-tui                  Print logs instead of the interactive dashboard\n")
+	fmt.Fprintf(os.Stderr, "  --tui                     Show the interactive dashboard instead of logs (preview)\n")
 	fmt.Fprintf(os.Stderr, "  --env-file string         Path to an env file to load configuration from\n\n")
 
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
@@ -100,13 +100,13 @@ func printServeHelp() {
 	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n")
 	fmt.Fprintf(os.Stderr, "  GOOPHY_ALLOWED_ORIGINS  Web pages (e.g. https://app.example) that may call goophy while it adds\n")
 	fmt.Fprintf(os.Stderr, "                   an API key or the login; pages on localhost always may (default: none)\n")
-	fmt.Fprintf(os.Stderr, "  NO_TUI           Set to true to print logs instead of the dashboard\n")
+	fmt.Fprintf(os.Stderr, "  GOOPHY_TUI       Set to true to show the interactive dashboard (preview), like --tui\n")
 	fmt.Fprintf(os.Stderr, "  \n")
 	fmt.Fprintf(os.Stderr, "  Environment variables can also be set in a .env file in the current directory\n")
 	fmt.Fprintf(os.Stderr, "  or specified using the --env-file flag.\n\n")
 
-	fmt.Fprintf(os.Stderr, "When stdin and stdout are a terminal, serve shows an interactive dashboard\n")
-	fmt.Fprintf(os.Stderr, "(session stats, requests, models, logs); otherwise it prints logs.\n\n")
+	fmt.Fprintf(os.Stderr, "Preview: with --tui (or GOOPHY_TUI=true) in a terminal, serve shows an interactive\n")
+	fmt.Fprintf(os.Stderr, "dashboard (session stats, usage, requests, models, logs) instead of printing logs.\n\n")
 
 	fmt.Fprintf(os.Stderr, "Example usage:\n")
 	fmt.Fprintf(os.Stderr, "  API_ENDPOINT=https://api.example.com/v1 API_KEY=secret123 goophy serve\n\n")
@@ -249,7 +249,7 @@ func serveCommand(args []string) {
 	// Bind address. Empty default means "fall back to the HOST env / 127.0.0.1";
 	// an explicit flag value overrides the env.
 	listenAllFlag := serveFlags.Bool("listen-all", false, "Listen on all interfaces (shorthand for --host 0.0.0.0)")
-	noTUIFlag := serveFlags.Bool("no-tui", false, "Print logs instead of the interactive dashboard")
+	tuiFlag := serveFlags.Bool("tui", false, "Show the interactive dashboard instead of logs (preview)")
 	// Every option below supports both a --flag and an environment variable.
 	// An empty flag default means "fall back to the env var / built-in default";
 	// an explicit flag value overrides the env (see resolve).
@@ -324,11 +324,15 @@ func serveCommand(args []string) {
 
 	proxy.UserAgent = "goophy/" + displayVersion()
 
-	// The dashboard needs an interactive terminal on both ends; anything else
-	// (Docker, systemd/launchd, piped output) keeps the plain log stream.
-	useTUI := !*noTUIFlag && !strings.EqualFold(env.GetEnv("NO_TUI", ""), "true") &&
-		term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
-	if useTUI {
+	// The dashboard is a preview: opt in with --tui or GOOPHY_TUI=true. It
+	// needs an interactive terminal on both ends; anything else (Docker,
+	// systemd/launchd, piped output) keeps the plain log stream.
+	wantTUI := *tuiFlag || strings.EqualFold(env.GetEnv("GOOPHY_TUI", ""), "true")
+	isTTY := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	if wantTUI && !isTTY {
+		fmt.Fprintln(os.Stderr, "The dashboard (--tui / GOOPHY_TUI) needs an interactive terminal; printing logs instead.")
+	}
+	if wantTUI && isTTY {
 		code := runWithDashboard(ctx, cfg)
 		stop()
 		os.Exit(code)
