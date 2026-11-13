@@ -122,8 +122,9 @@ type OllamaProxy struct {
 	// keySource, when set, supplies the key per request instead of apiKey
 	// (a gateway login that can change while serve runs).
 	keySource func() (string, error)
-	// onUnauthorized, when set, is told which key the upstream answered 401.
-	onUnauthorized func(key string)
+	// onUnauthorized, when set, is told which key the upstream answered 401,
+	// and to which request ("GET /v1/models").
+	onUnauthorized func(key, request string)
 	// allowedOrigins are the browser origins (besides loopback ones) that may
 	// use the proxy while it adds a key; "*" allows any.
 	allowedOrigins []string
@@ -190,8 +191,9 @@ func (p *OllamaProxy) SetAllowedOrigins(origins []string) { p.allowedOrigins = o
 func (p *OllamaProxy) addsKey() bool { return p.apiKey != "" || p.keySource != nil }
 
 // SetOnUnauthorized has the proxy call f with the key the upstream refused
-// with 401, e.g. to explain an expired login.
-func (p *OllamaProxy) SetOnUnauthorized(f func(key string)) { p.onUnauthorized = f }
+// with 401 and the request it refused ("GET /v1/models"), e.g. to explain an
+// expired login.
+func (p *OllamaProxy) SetOnUnauthorized(f func(key, request string)) { p.onUnauthorized = f }
 
 // key returns the upstream key to use now.
 func (p *OllamaProxy) key() (string, error) {
@@ -306,7 +308,7 @@ func (p *OllamaProxy) newReverseProxy() *httputil.ReverseProxy {
 	proxy.ModifyResponse = func(res *http.Response) error {
 		if res.StatusCode == http.StatusUnauthorized && p.onUnauthorized != nil {
 			key, _ := res.Request.Context().Value(apiKeyKey{}).(string)
-			p.onUnauthorized(key)
+			p.onUnauthorized(key, res.Request.Method+" "+res.Request.URL.Path)
 		}
 		return nil
 	}
@@ -1007,11 +1009,21 @@ func routeOpenAIPath(kind UpstreamKind, path string) (string, bool) {
 		// or a client "/ollama/..." prefix — merely shares the suffix and must be
 		// left for rewritePath, so we don't strip its prefix or mangle its body.
 		head := strings.TrimSuffix(path, suffix)
-		if head == "" || head == "/v1" || head == prefix {
+		if head == "" || head == "/v1" || head == prefix || openWebUIStyle(head, suffix) {
 			return prefix + suffix, true
 		}
 	}
 	return path, false
+}
+
+// openWebUIStyle reports whether head+suffix is one of Open WebUI's OpenAI-style
+// endpoints ("/api/models", "/api/chat/completions") that clients configured for
+// Open WebUI send. Other upstreams serve these under their own prefix, and
+// neither path exists on Ollama, so they are routed like "/v1/...". Other
+// "/api/..." paths are left alone: "/api/embeddings" is an Ollama-native
+// endpoint.
+func openWebUIStyle(head, suffix string) bool {
+	return head == "/api" && (suffix == "/models" || suffix == "/chat/completions")
 }
 
 // healthProbe pairs an endpoint path with the upstream flavor a 2xx from it hints

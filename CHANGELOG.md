@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-11-13
+
+### Fixed
+- `GET /api/models` and `POST /api/chat/completions`, the paths clients
+  configured for Open WebUI use, now reach the OpenAI API (`/v1/...`) of other
+  upstreams. Through the NHN gateway, `/api/models` reached the gateway's web
+  app instead and failed with `401 not logged in`.
+- After a `401` from the gateway, goophy asks the gateway whether the login is
+  still valid before telling you to run `goophy login`. A valid login refused by
+  one endpoint is now logged as such (once per endpoint), instead of
+  "The gateway refused your goophy login".
+
 ## [0.3.0] - 2026-11-13
 
 ### Added

@@ -160,6 +160,15 @@ func TestRouteOpenAIPath(t *testing.T) {
 		{"openwebui api embeddings routes", UpstreamOpenWebUI, "/api/embeddings", "/api/embeddings", true},
 		// A client /ollama prefix is not an OpenAI prefix; leave it for rewritePath.
 		{"ollama-prefixed embeddings untouched", UpstreamOllama, "/ollama/api/embeddings", "/ollama/api/embeddings", false},
+		// Open WebUI-style /api/models and /api/chat/completions reach the
+		// OpenAI API of other upstreams (an OpenAI-compatible gateway answers
+		// /api/models from its web app, which wants a browser session).
+		{"openwebui-style models to v1", UpstreamOpenAI, "/api/models", "/v1/models", true},
+		{"openwebui-style chat to v1", UpstreamOpenAI, "/api/chat/completions", "/v1/chat/completions", true},
+		{"openwebui-style models on ollama", UpstreamOllama, "/api/models", "/v1/models", true},
+		{"openwebui-style models unknown", UpstreamUnknown, "/api/models", "/v1/models", true},
+		{"openwebui api models stays", UpstreamOpenWebUI, "/api/models", "/api/models", true},
+		{"other api completions untouched", UpstreamOpenAI, "/api/completions", "/api/completions", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -341,6 +350,29 @@ func TestProxyRoutesOpenAIPathUnknownUpstream(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK {
 		t.Errorf("response status = %d, want 200", rec.Code)
+	}
+}
+
+// TestProxyRoutesOpenWebUIStyleModels: a client configured for Open WebUI asks
+// an OpenAI-compatible upstream (the NHN gateway) for /api/models. That must
+// reach /v1/models; the gateway's own /api/models wants a browser session and
+// answers 401.
+func TestProxyRoutesOpenWebUIStyleModels(t *testing.T) {
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	p, err := NewOllamaProxy("127.0.0.1", "0", upstream.URL, "", UpstreamOpenAI)
+	if err != nil {
+		t.Fatalf("NewOllamaProxy: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	p.handle(p.newReverseProxy())(rec, httptest.NewRequest(http.MethodGet, "/api/models", nil))
+	if gotPath != "/v1/models" || rec.Code != http.StatusOK {
+		t.Errorf("upstream path %q, status %d; want /v1/models, 200", gotPath, rec.Code)
 	}
 }
 
@@ -556,16 +588,16 @@ func TestProxyKeySource(t *testing.T) {
 		t.Errorf("after a new login, Authorization = %q, want Bearer second", gotAuth)
 	}
 
-	// The upstream refusing the key is reported with that key.
-	var refused string
-	p.SetOnUnauthorized(func(k string) { refused = k })
+	// The upstream refusing the key is reported with that key and the request.
+	var refused, refusedReq string
+	p.SetOnUnauthorized(func(k, r string) { refused, refusedReq = k, r })
 	status := http.StatusUnauthorized
 	upstream.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		w.WriteHeader(status)
 	})
-	if rec := send(); rec.Code != http.StatusUnauthorized || refused != "second" {
-		t.Errorf("upstream 401: got %d, reported %q; want 401 reported for second", rec.Code, refused)
+	if rec := send(); rec.Code != http.StatusUnauthorized || refused != "second" || refusedReq != "POST /v1/chat/completions" {
+		t.Errorf("upstream 401: got %d, reported %q for %q; want 401 reported for second on POST /v1/chat/completions", rec.Code, refused, refusedReq)
 	}
 
 	keyErr = errors.New("goophy is logged out; run 'goophy login'")

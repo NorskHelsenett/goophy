@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -26,7 +27,19 @@ type Live struct {
 	cur     Credentials
 	err     error
 	refused string // the token the gateway last refused, so that is logged once
+
+	// A 401 is checked against the gateway before blaming the login, because
+	// some gateway endpoints refuse any goophy login.
+	whoAmI   func(context.Context, Credentials) (Me, error)
+	checking bool            // a check is running
+	validTok string          // the token last confirmed valid...
+	validAt  time.Time       // ...and when
+	noted    map[string]bool // requests already logged as refused despite a valid login
+	pending  sync.WaitGroup  // running checks, for tests
 }
+
+// validFor is how long a confirmed login is trusted before a 401 is checked again.
+const validFor = time.Minute
 
 // NewLive starts from the credentials serve was started with; serve keeps
 // proxying to c.Gateway.
@@ -35,7 +48,7 @@ func NewLive(c Credentials) (*Live, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &Live{gateway: c.Gateway, path: p, cur: c, checked: time.Now()}
+	l := &Live{gateway: c.Gateway, path: p, cur: c, checked: time.Now(), whoAmI: WhoAmI}
 	if fi, err := os.Stat(p); err == nil {
 		l.file = fi
 	}
@@ -60,16 +73,61 @@ func (l *Live) Token() (string, error) {
 	return l.cur.Token, nil
 }
 
-// Refused is told when the gateway answered 401 to token. It logs, once per
-// token, what to do about it.
-func (l *Live) Refused(token string) {
+// Refused is told when the gateway answered 401 to request ("GET /api/models")
+// made with token. A 401 doesn't always mean the login is bad: some gateway
+// endpoints refuse every goophy login. So Refused asks the gateway, in the
+// background, whether the token is still valid, and logs either what to do
+// about the login (once per token) or which endpoint refused a valid login
+// (once per request).
+func (l *Live) Refused(token, request string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if token == "" || token == l.refused {
+	if token == "" || token == l.refused || l.checking {
 		return
 	}
-	l.refused = token
-	log.Print("The gateway refused your goophy login (expired after a week unused, or revoked); run 'goophy login'")
+	if token == l.validTok && time.Since(l.validAt) < validFor {
+		l.noteEndpoint(request)
+		return
+	}
+	l.checking = true
+	l.pending.Add(1)
+	go l.verify(l.gateway, token, request)
+}
+
+// verify asks the gateway whether token is still valid after it refused request.
+func (l *Live) verify(gw, token, request string) {
+	defer l.pending.Done()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := l.whoAmI(ctx, Credentials{Gateway: gw, Token: token})
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.checking = false
+	var se *StatusError
+	switch {
+	case err == nil:
+		l.validTok, l.validAt = token, time.Now()
+		l.noteEndpoint(request)
+	case errors.As(err, &se) && se.Status == 401:
+		l.refused = token
+		log.Print("The gateway refused your goophy login (expired after a week unused, or revoked); run 'goophy login'")
+	default:
+		log.Printf("The gateway answered 401 to %s, and checking the goophy login failed: %v", request, err)
+	}
+}
+
+// noteEndpoint logs, once per request, that the gateway refused it although
+// the login is valid. Callers hold l.mu.
+func (l *Live) noteEndpoint(request string) {
+	if l.noted[request] {
+		return
+	}
+	if l.noted == nil {
+		l.noted = map[string]bool{}
+	}
+	l.noted[request] = true
+	log.Printf("The gateway answered 401 to %s although your goophy login is valid: that endpoint doesn't accept goophy logins", request)
 }
 
 // reload re-reads the credentials when the file changed. Save writes a new
