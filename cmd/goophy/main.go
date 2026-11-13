@@ -121,7 +121,8 @@ func printUpdateHelp() {
 
 	fmt.Fprintf(os.Stderr, "Description:\n")
 	fmt.Fprintf(os.Stderr, "  Checks for and applies available updates for Goophy.\n")
-	fmt.Fprintf(os.Stderr, "  If running a development version (dev), updates are not available.\n\n")
+	fmt.Fprintf(os.Stderr, "  If running a development version (dev), updates are not available.\n")
+	fmt.Fprintf(os.Stderr, "  Installed with Homebrew? Use 'brew upgrade goophy' instead.\n\n")
 
 	fmt.Fprintf(os.Stderr, "Example usage:\n")
 	fmt.Fprintf(os.Stderr, "  goophy update\n\n")
@@ -542,6 +543,13 @@ func updateCommand(args []string) {
 	if version == "dev" {
 		fmt.Println("Running development version, updates not available.")
 		fmt.Println("Please build from source or download a released version.")
+		os.Exit(0)
+	}
+
+	// A package-managed binary is upgraded by its package manager, not by
+	// replacing it in place.
+	if pm := updater.PackageManager(); pm != "" {
+		fmt.Printf("goophy was installed with %s; upgrade it with:\n\n  %s\n", pm, updater.UpgradeHint(pm))
 		os.Exit(0)
 	}
 

@@ -8,6 +8,78 @@ A simple proxy server for Ollama that adds authentication to requests.
 
 This proxy server forwards all requests to an upstream LLM API while adding an `Authorization: Bearer` token header for authentication. It preserves original request methods, headers, and bodies, and works with **Ollama, vLLM, Open WebUI, and other OpenAI-compatible servers** — auto-detecting the upstream at startup and adapting its behavior (see [Supported upstreams](#supported-upstreams)).
 
+## Install
+
+goophy is a single binary for macOS, Linux and Windows (arm64 and x86_64).
+
+### Homebrew (macOS and Linux)
+
+```bash
+brew install norskhelsenett/tap/goophy
+```
+
+Upgrade with `brew upgrade goophy`. Homebrew owns a Homebrew install, so
+`goophy update` and the update check point to `brew upgrade goophy` instead of
+replacing the binary. The tap only gets stable releases, not `-rc` prereleases.
+
+### Prebuilt binary
+
+Download the archive for your platform from the
+[releases page](https://github.com/NorskHelsenett/goophy/releases/latest), or on
+macOS and Linux:
+
+```bash
+os=$(uname -s)                             # Darwin or Linux
+arch=$(uname -m | sed 's/aarch64/arm64/')  # arm64 or x86_64
+mkdir -p ~/.local/bin
+curl -fsSL "https://github.com/NorskHelsenett/goophy/releases/latest/download/goophy_${os}_${arch}.tar.gz" \
+  | tar -xz -C ~/.local/bin goophy
+```
+
+Make sure `~/.local/bin` is on your `PATH`. On macOS, a binary downloaded with a
+browser is quarantined by Gatekeeper because it isn't notarized; allow it with
+`xattr -d com.apple.quarantine ~/.local/bin/goophy` (`curl` doesn't set the
+flag). On Windows, unzip `goophy_Windows_x86_64.zip` (or `_arm64`) to a folder on
+your `PATH`.
+
+A binary installed this way keeps itself current: run `goophy update`, see
+[Auto-Update System](#auto-update-system).
+
+### Docker
+
+```bash
+docker run --rm --env-file .env -p 22434:22434 ghcr.io/norskhelsenett/goophy serve
+```
+
+with a `.env` such as:
+
+```.env
+API_ENDPOINT="https://openwebui.com/ollama"
+API_KEY="sk-your-key-from-OWUI"
+```
+
+Inside a container goophy has to listen on all interfaces to be reachable
+through `-p`; the image takes care of that.
+
+### From source
+
+```bash
+go install github.com/NorskHelsenett/goophy/cmd/goophy@latest
+```
+
+A source build reports its version as `dev` and doesn't check for updates. See
+[Building and Running](#building-and-running) for building from a checkout.
+
+### First run
+
+```bash
+goophy login     # NHN users: sign in to the LLM gateway (see below)
+goophy serve     # proxy on http://127.0.0.1:22434
+```
+
+or, for any other upstream,
+`goophy serve --api-endpoint http://localhost:11434 --api-key sk-...`.
+
 ## Configuration
 
 The proxy can be configured with environment variables or, equivalently, with
@@ -148,26 +220,6 @@ systemd/launchd, piped output) it says so and prints logs instead.
 
 ## Usage
 
-### Get Started
-
-#### 1. Download the binaries from releases
-
-[https://github.com/NorskHelsenett/goophy/releases](https://github.com/NorskHelsenett/goophy/releases)
-
-#### 2. Docker
-
-Create a `.env` file with the following content:
-
-```.env
-API_ENDPOINT="https://openwebui.com/ollama"
-API_KEY="sk-your-key-from-OWUI"
-```
-Then run the following container:
-
-```bash
- docker run --rm --env-file .env -p 22434:22434 ghcr.io/norskhelsenett/goophy serve
-````
-
 ### Building and Running
 
 ```bash
@@ -195,7 +247,7 @@ PORT=22434 API_ENDPOINT=https://my-api-server.example.com/v1 API_KEY=my-secret-k
 # ./goophy serve
 ```
 
-### Docker
+### Building the Docker image
 
 You can also build and run this proxy in Docker:
 
@@ -210,17 +262,6 @@ docker run -p 22434:22434 -e API_ENDPOINT=https://my-api-server.example.com/v1 -
 ### OpenWebUI
 
 OpenWebUI is accessible at the `/ollama` endpoint, so using it would be like `example.com/ollama`.
-
-### Multi-platform Builds
-
-This application is built for multiple platforms:
-- macOS (Intel/AMD64 and Apple Silicon/ARM64)
-- Linux (AMD64 and ARM64)
-- Windows (AMD64 and ARM64)
-
-You can download the latest release from the [releases page](https://github.com/goophy/goophy/releases).
-
-> To run this on MacOSX due to Gatekeeper, you have to add this binary to the allowlist by running `xattr -d com.apple.quarantine ~/.local/bin/goophy`
 
 ### Tips
 

@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   an interactive terminal it falls back to the plain log output. In dashboard
   mode goophy asks OpenAI-compatible upstreams for streamed token usage
   (`stream_options.include_usage`) when the client doesn't set it.
+- Homebrew install for macOS and Linux:
+  `brew install norskhelsenett/tap/goophy`. Each stable release publishes a
+  cask to `NorskHelsenett/homebrew-tap`; `-rc` prereleases don't. On a Homebrew
+  install, `goophy update` and the update check point to `brew upgrade goophy`
+  instead of replacing the binary.
 
 ### Security
 - While goophy adds a key (`API_KEY` or the login), it no longer answers any

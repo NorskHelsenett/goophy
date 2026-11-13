@@ -158,7 +158,7 @@ func (u *AutoUpdater) checkForUpdate() {
 	}
 
 	log.Printf("New version available: %s (current: %s)", updateInfo.LatestVersion, updateInfo.CurrentVersion)
-	log.Printf("Run 'goophy update' to upgrade to the latest version")
+	log.Printf("Run '%s' to upgrade to the latest version", UpgradeHint(PackageManager()))
 }
 
 // CheckForUpdates checks if a new update is available
