@@ -158,7 +158,7 @@ func (u *AutoUpdater) checkForUpdate() {
 	}
 
 	log.Printf("New version available: %s (current: %s)", updateInfo.LatestVersion, updateInfo.CurrentVersion)
-	log.Printf("Run 'goophy update' to upgrade to the latest version")
+	log.Printf("Run '%s' to upgrade to the latest version", UpgradeHint(PackageManager()))
 }
 
 // CheckForUpdates checks if a new update is available
@@ -174,13 +174,19 @@ func (u *AutoUpdater) CheckForUpdates() (*UpdateInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	release, _, err := u.client.Repositories.GetLatestRelease(ctx, githubOwner, githubRepo)
+	release, err := u.newestRelease(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	latestVersion := strings.TrimPrefix(release.GetTagName(), "v")
+	// Only ever move forward: a preview build must not be "updated" back to
+	// the older stable release. An unparsable version falls back to the old
+	// rule (any different tag is an update).
 	isUpdateAvailable := latestVersion != u.options.CurrentVersion
+	if cmp, ok := compareVersions(latestVersion, u.options.CurrentVersion); ok {
+		isUpdateAvailable = cmp > 0
+	}
 
 	updateInfo := &UpdateInfo{
 		CurrentVersion:    u.options.CurrentVersion,
@@ -358,4 +364,52 @@ func (u *AutoUpdater) downloadAndApplyUpdate(url, assetName string) error {
 	}
 
 	return nil
+}
+
+// newestRelease is the release to update to. Stable builds follow GitHub's
+// latest release, which skips prereleases. A prerelease build (0.3.0-rc.1)
+// opted in to previews: it follows the newest release of any kind, so it
+// gets the next rc, and the stable release once that is out.
+func (u *AutoUpdater) newestRelease(ctx context.Context) (*github.RepositoryRelease, error) {
+	if !isPrerelease(u.options.CurrentVersion) {
+		release, _, err := u.client.Repositories.GetLatestRelease(ctx, githubOwner, githubRepo)
+		return release, err
+	}
+	releases, _, err := u.client.Repositories.ListReleases(ctx, githubOwner, githubRepo, &github.ListOptions{PerPage: 50})
+	if err != nil {
+		return nil, err
+	}
+	tags := make([]string, 0, len(releases))
+	byTag := map[string]*github.RepositoryRelease{}
+	for _, r := range releases {
+		if r.GetDraft() {
+			continue
+		}
+		tags = append(tags, r.GetTagName())
+		byTag[r.GetTagName()] = r
+	}
+	newest := pickNewest(tags, true)
+	if newest == "" {
+		return nil, fmt.Errorf("no releases found")
+	}
+	return byTag[newest], nil
+}
+
+// pickNewest returns the highest semantic version among tags, skipping
+// prereleases unless asked for and tags that are not versions.
+func pickNewest(tags []string, prereleases bool) string {
+	best := ""
+	for _, t := range tags {
+		if _, _, ok := parseVersion(t); !ok || (!prereleases && isPrerelease(t)) {
+			continue
+		}
+		if best == "" {
+			best = t
+			continue
+		}
+		if c, _ := compareVersions(t, best); c > 0 {
+			best = t
+		}
+	}
+	return best
 }

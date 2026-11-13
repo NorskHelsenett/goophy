@@ -8,6 +8,78 @@ A simple proxy server for Ollama that adds authentication to requests.
 
 This proxy server forwards all requests to an upstream LLM API while adding an `Authorization: Bearer` token header for authentication. It preserves original request methods, headers, and bodies, and works with **Ollama, vLLM, Open WebUI, and other OpenAI-compatible servers** — auto-detecting the upstream at startup and adapting its behavior (see [Supported upstreams](#supported-upstreams)).
 
+## Install
+
+goophy is a single binary for macOS, Linux and Windows (arm64 and x86_64).
+
+### Homebrew (macOS and Linux)
+
+```bash
+brew install norskhelsenett/tap/goophy
+```
+
+Upgrade with `brew upgrade goophy`. Homebrew owns a Homebrew install, so
+`goophy update` and the update check point to `brew upgrade goophy` instead of
+replacing the binary. The tap only gets stable releases, not `-rc` prereleases.
+
+### Prebuilt binary
+
+Download the archive for your platform from the
+[releases page](https://github.com/NorskHelsenett/goophy/releases/latest), or on
+macOS and Linux:
+
+```bash
+os=$(uname -s)                             # Darwin or Linux
+arch=$(uname -m | sed 's/aarch64/arm64/')  # arm64 or x86_64
+mkdir -p ~/.local/bin
+curl -fsSL "https://github.com/NorskHelsenett/goophy/releases/latest/download/goophy_${os}_${arch}.tar.gz" \
+  | tar -xz -C ~/.local/bin goophy
+```
+
+Make sure `~/.local/bin` is on your `PATH`. On macOS, a binary downloaded with a
+browser is quarantined by Gatekeeper because it isn't notarized; allow it with
+`xattr -d com.apple.quarantine ~/.local/bin/goophy` (`curl` doesn't set the
+flag). On Windows, unzip `goophy_Windows_x86_64.zip` (or `_arm64`) to a folder on
+your `PATH`.
+
+A binary installed this way keeps itself current: run `goophy update`, see
+[Auto-Update System](#auto-update-system).
+
+### Docker
+
+```bash
+docker run --rm --env-file .env -p 22434:22434 ghcr.io/norskhelsenett/goophy serve
+```
+
+with a `.env` such as:
+
+```.env
+API_ENDPOINT="https://openwebui.com/ollama"
+API_KEY="sk-your-key-from-OWUI"
+```
+
+Inside a container goophy has to listen on all interfaces to be reachable
+through `-p`; the image takes care of that.
+
+### From source
+
+```bash
+go install github.com/NorskHelsenett/goophy/cmd/goophy@latest
+```
+
+A source build reports its version as `dev` and doesn't check for updates. See
+[Building and Running](#building-and-running) for building from a checkout.
+
+### First run
+
+```bash
+goophy login     # NHN users: sign in to the LLM gateway (see below)
+goophy serve     # proxy on http://127.0.0.1:22434
+```
+
+or, for any other upstream,
+`goophy serve --api-endpoint http://localhost:11434 --api-key sk-...`.
+
 ## Configuration
 
 The proxy can be configured with environment variables or, equivalently, with
@@ -20,6 +92,7 @@ environment variable are both set, the flag wins.
 | `PORT`                  | `--port`          | `22434`                  | Port to run the proxy server on                   |
 | `API_ENDPOINT`          | `--api-endpoint`  | `http://localhost:11434` | Target API endpoint to forward requests to        |
 | `API_KEY`               | `--api-key`       | _(empty)_                | API key used for authentication                   |
+| `GOOPHY_ALLOWED_ORIGINS` |               | _(empty)_                | Comma-separated web origins that may call goophy while it adds a key (see [Browsers](#browsers)) |
 | `DISABLE_AUTO_UPDATE`   | —                 | `false`                  | Disable auto-update                               |
 | `UPDATE_CHECK_INTERVAL` | —                 | `24h`                    | How often to check for updates                    |
 
@@ -39,6 +112,44 @@ Flags and `--env-file` may be placed **before or after** the command — `goophy
 and `goophy --env-file my-config.env serve` are equivalent.
 
 See `example.env` for a sample configuration file format.
+
+## The NHN LLM gateway
+
+goophy can sign you in to the LLM gateway and proxy to it with your own token:
+
+```bash
+goophy login     # opens the browser; approve, and you are signed in
+goophy serve     # no API_ENDPOINT/API_KEY needed: proxies to the gateway as you
+goophy usage     # what you have used the last 30 days (--days N)
+goophy logout    # revokes the token and forgets it
+```
+
+`goophy login` opens `https://gw.chat.nhn.no` (override with `--gateway` or
+`GOOPHY_GATEWAY`). When no browser can be opened (over SSH, or with
+`--no-browser`) it prints a link to open on any machine, and asks for the code
+that page shows. The login expires after 7 days unused, and 30 days after you
+logged in at the latest; it is listed under Tokens in the gateway's web
+interface. An explicit `API_ENDPOINT` or `API_KEY` always wins
+over the login.
+
+A running `goophy serve` follows `goophy login` and `goophy logout` from other
+shells: after a new login it uses the new token, and while logged out it
+answers `401` with a message saying to run `goophy login`. The token is stored
+in `credentials.json`, readable only by you, in `~/Library/Application
+Support/goophy` (macOS), `~/.config/goophy` (Linux) or
+`%LocalAppData%\goophy` (Windows; kept out of the roaming profile so it does
+not follow you to other PCs).
+
+### Browsers
+
+While goophy adds a key (`API_KEY` or the login), web pages could otherwise
+spend it through `http://127.0.0.1:22434`. So goophy then serves browser
+requests only from pages on `localhost` and the origins listed in
+`GOOPHY_ALLOWED_ORIGINS` (e.g. `https://app.example`, or `*` for any), and on
+a loopback address only answers to `localhost`-style `Host` names (and
+`host.docker.internal`), which blocks DNS rebinding. Programs such as curl,
+SDKs and editors send no `Origin` and are not affected. Without a key, any
+origin is allowed, as before.
 
 ## Supported upstreams
 
@@ -81,27 +192,33 @@ Auto-pull disabled: vLLM upstreams don't support /api/pull
 Run with `VERBOSE=true` to also log each path rewrite
 (`Routed /chat/completions -> /api/chat/completions for Open WebUI upstream`).
 
+## Dashboard (preview)
+
+`goophy serve --tui` (or `GOOPHY_TUI=true`) shows a live dashboard in the
+terminal instead of streaming logs. It is a preview and off by default. Switch tabs with `1`–`5`, `Tab` or the arrow keys;
+`q` quits and prints a short session summary.
+
+| Tab           | Shows                                                                     |
+| ------------- | ------------------------------------------------------------------------- |
+| **Dashboard** | Requests, errors, prompt/completion tokens, live tok/s, in-flight streams |
+| **Usage**     | Session token totals (incl. prompt-cache hits when reported), tokens per minute, usage by client (User-Agent) and the largest prompts |
+| **Requests**  | Every request with status, model, time to first byte, duration and tokens; `Enter` toggles details (path before/after routing, client) |
+| **Models**    | Per-model requests, tokens, average time to first byte and tok/s          |
+| **Logs**      | The usual log output, scrollable, with `/` to filter                      |
+
+Statistics are kept in memory for the session only. Token counts come from the
+upstream's `usage` (OpenAI) or `prompt_eval_count`/`eval_count` (Ollama). To get
+them for streamed OpenAI-style requests, goophy adds
+`stream_options: {"include_usage": true}` when the client didn't set
+`stream_options`, and lets its own HTTP client negotiate compression with the
+upstream for generation endpoints. When usage isn't reported, output tokens are
+estimated from streamed chunks and shown with a `~`.
+
+Without `--tui` goophy prints logs exactly as before, with none of the above
+request changes. With `--tui` but no interactive terminal (Docker,
+systemd/launchd, piped output) it says so and prints logs instead.
+
 ## Usage
-
-### Get Started
-
-#### 1. Download the binaries from releases
-
-[https://github.com/NorskHelsenett/goophy/releases](https://github.com/NorskHelsenett/goophy/releases)
-
-#### 2. Docker
-
-Create a `.env` file with the following content:
-
-```.env
-API_ENDPOINT="https://openwebui.com/ollama"
-API_KEY="sk-your-key-from-OWUI"
-```
-Then run the following container:
-
-```bash
- docker run --rm --env-file .env -p 22434:22434 ghcr.io/norskhelsenett/goophy serve
-````
 
 ### Building and Running
 
@@ -130,7 +247,7 @@ PORT=22434 API_ENDPOINT=https://my-api-server.example.com/v1 API_KEY=my-secret-k
 # ./goophy serve
 ```
 
-### Docker
+### Building the Docker image
 
 You can also build and run this proxy in Docker:
 
@@ -145,17 +262,6 @@ docker run -p 22434:22434 -e API_ENDPOINT=https://my-api-server.example.com/v1 -
 ### OpenWebUI
 
 OpenWebUI is accessible at the `/ollama` endpoint, so using it would be like `example.com/ollama`.
-
-### Multi-platform Builds
-
-This application is built for multiple platforms:
-- macOS (Intel/AMD64 and Apple Silicon/ARM64)
-- Linux (AMD64 and ARM64)
-- Windows (AMD64 and ARM64)
-
-You can download the latest release from the [releases page](https://github.com/goophy/goophy/releases).
-
-> To run this on MacOSX due to Gatekeeper, you have to add this binary to the allowlist by running `xattr -d com.apple.quarantine ~/.local/bin/goophy`
 
 ### Tips
 

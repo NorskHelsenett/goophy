@@ -5,6 +5,77 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-11-13
+
+### Added
+- `goophy login` signs in to the NHN LLM gateway (default
+  `https://gw.chat.nhn.no`, or `--gateway` / `GOOPHY_GATEWAY`) through the
+  browser and stores a personal token in the user config directory
+  (`~/Library/Application Support/goophy` on macOS, `~/.config/goophy` on
+  Linux, `%LocalAppData%\goophy` on Windows). Without a browser (over SSH, or with `--no-browser`) it prints a link
+  to open anywhere and asks for the code that page shows.
+- `goophy logout` revokes that token on the gateway and forgets it.
+- `goophy usage [--days N]` shows the gateway usage of the logged-in user.
+- `goophy serve` proxies to the gateway with the login when no `API_ENDPOINT`
+  and no `API_KEY` are given. Once logged in, a plain `goophy serve` therefore
+  no longer goes to a local Ollama: set `API_ENDPOINT=http://localhost:11434`
+  for that. It refuses to share the login on a non-loopback address
+  (`--listen-all`), and refuses an expired login.
+- A running `goophy serve` follows `goophy login` and `goophy logout` from
+  other shells. Before, a new login revoked the token serve was using and
+  every request failed until serve was restarted. While logged out or expired
+  it answers `401` with a message saying to run `goophy login`.
+- goophy no longer trusts the expiry stored at login: the gateway extends a
+  login as it is used (7 days unused, 30 days at most), so the stored date
+  goes stale. `serve` asks the gateway about a login past its stored expiry
+  and stores the new one, and logs what to do when the gateway answers `401`.
+- `GOOPHY_ALLOWED_ORIGINS`: web origins that may call goophy while it adds a
+  key.
+- Preview: an interactive dashboard for `goophy serve`, opt-in with `--tui` or
+  `GOOPHY_TUI=true` (default output is unchanged): live session stats
+  (requests, errors, tokens, tok/s), token usage over time and per client
+  (including prompt-cache hits), a request inspector, per-model usage
+  (including embedding and rerank models) and a filterable log view. Without
+  an interactive terminal it falls back to the plain log output. In dashboard
+  mode goophy asks OpenAI-compatible upstreams for streamed token usage
+  (`stream_options.include_usage`) when the client doesn't set it.
+- Homebrew install for macOS and Linux:
+  `brew install norskhelsenett/tap/goophy`. Each stable release publishes a
+  cask to `NorskHelsenett/homebrew-tap`; `-rc` prereleases don't. On a Homebrew
+  install, `goophy update` and the update check point to `brew upgrade goophy`
+  instead of replacing the binary.
+
+### Security
+- While goophy adds a key (`API_KEY` or the login), it no longer answers any
+  web page with `Access-Control-Allow-Origin: *`: pages could spend the key
+  through `127.0.0.1` and read the answers. Browser requests are served only
+  from `localhost` pages and `GOOPHY_ALLOWED_ORIGINS`, and on a loopback
+  address only `localhost`-style `Host` names (and `host.docker.internal`) are
+  answered, which blocks DNS rebinding. Without a key nothing changes.
+- On Windows the login is stored in `%LocalAppData%` instead of the roaming
+  `%AppData%`, so the token no longer follows the profile to other PCs or a
+  file share. A login from rc.1/rc.2 is moved over on first use.
+
+### Changed
+- `goophy serve` warns when `API_ENDPOINT`, `OLLAMA_ENDPOINT` or `API_KEY`
+  (environment, `.env` or flag) override a stored login, naming them: a
+  forgotten `.env` with an old key otherwise gets every request refused.
+- The updater only moves forward: it never offers an older version. A
+  prerelease build (e.g. `0.3.0-rc.1`) follows prereleases too, and gets the
+  stable release once it is out; stable builds still only see stable releases.
+- Logs and help say "goophy proxy" rather than "Ollama proxy": goophy also
+  fronts vLLM, Open WebUI and the gateway.
+- Prerelease tags (e.g. `v0.3.0-rc.1`) are published as GitHub prereleases and
+  do not move the container image's `latest` tag, so previews are not
+  picked up by the self-updater or `:latest`.
+
+### Fixed
+- When an env file (`.env` or `--env-file`) sets a variable more than once,
+  the last assignment now wins, as in a shell, docker compose and other
+  dotenv loaders. goophy used the first one, so e.g. an old `API_KEY` near
+  the top of `.env` silently beat the one below it. Variables already set in
+  the environment still take precedence over the file.
+
 ## [0.2.4] - 2026-11-11
 
 ### Added

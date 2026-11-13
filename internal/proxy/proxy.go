@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/NorskHelsenett/goophy/internal/stats"
 )
 
 // SetVerbose enables per-request body and rewrite logging.
@@ -49,6 +51,9 @@ type origPathKey struct{}
 // upstreamKindKey carries the upstream flavor resolved for a request, so the
 // director and transport agree on it even if detection completes mid-request.
 type upstreamKindKey struct{}
+
+// apiKeyKey carries the key resolved for a request to the director.
+type apiKeyKey struct{}
 
 // upstreamKindFrom returns the upstream flavor stored in ctx, or UpstreamUnknown.
 func upstreamKindFrom(ctx context.Context) UpstreamKind {
@@ -114,7 +119,15 @@ type OllamaProxy struct {
 	port      string
 	targetURL *url.URL
 	apiKey    string
-	server    *http.Server
+	// keySource, when set, supplies the key per request instead of apiKey
+	// (a gateway login that can change while serve runs).
+	keySource func() (string, error)
+	// onUnauthorized, when set, is told which key the upstream answered 401.
+	onUnauthorized func(key string)
+	// allowedOrigins are the browser origins (besides loopback ones) that may
+	// use the proxy while it adds a key; "*" allows any.
+	allowedOrigins []string
+	server         *http.Server
 
 	// upstream holds the detected UpstreamKind. While it's still unknown because
 	// detection failed (e.g. the upstream wasn't up at startup), requests retry it
@@ -123,6 +136,10 @@ type OllamaProxy struct {
 	detectMu   sync.Mutex
 	lastDetect time.Time
 	settled    bool // a retry reached the upstream; unknown is now final
+
+	// collector receives per-request statistics when the dashboard is enabled;
+	// nil (the default) disables tracking. See SetCollector.
+	collector *stats.Collector
 }
 
 const (
@@ -158,6 +175,32 @@ func NewOllamaProxy(host, port, targetURL, apiKey string, upstream UpstreamKind)
 	return p, nil
 }
 
+// SetKeySource makes the proxy ask src for the upstream key on every request.
+// When src fails, requests are answered with 401 and its message instead of
+// being forwarded.
+func (p *OllamaProxy) SetKeySource(src func() (string, error)) { p.keySource = src }
+
+// SetAllowedOrigins sets the browser origins, besides http://localhost and
+// http://127.0.0.1 on any port, that may call the proxy while it adds a key
+// (API_KEY or the gateway login). "*" allows any origin.
+func (p *OllamaProxy) SetAllowedOrigins(origins []string) { p.allowedOrigins = origins }
+
+// addsKey reports whether the proxy authenticates upstream on the caller's
+// behalf, which makes it worth protecting from web pages.
+func (p *OllamaProxy) addsKey() bool { return p.apiKey != "" || p.keySource != nil }
+
+// SetOnUnauthorized has the proxy call f with the key the upstream refused
+// with 401, e.g. to explain an expired login.
+func (p *OllamaProxy) SetOnUnauthorized(f func(key string)) { p.onUnauthorized = f }
+
+// key returns the upstream key to use now.
+func (p *OllamaProxy) key() (string, error) {
+	if p.keySource != nil {
+		return p.keySource()
+	}
+	return p.apiKey, nil
+}
+
 // logUpstreamBehavior logs the behavior changes implied by a detected flavor.
 func logUpstreamBehavior(kind UpstreamKind) {
 	if kind != UpstreamUnknown && !kind.SupportsPull() {
@@ -187,13 +230,15 @@ func (p *OllamaProxy) upstreamKind() UpstreamKind {
 
 	ctx, cancel := context.WithTimeout(context.Background(), redetectTimeout)
 	defer cancel()
-	kind, err := DetectUpstream(ctx, p.targetURL.String(), p.apiKey)
+	key, _ := p.key()
+	kind, err := DetectUpstream(ctx, p.targetURL.String(), key)
 	if err != nil {
 		log.Printf("Upstream detection retry failed: %v", err)
 		return UpstreamUnknown
 	}
 	// Reachable: whatever we found is the answer, recognized or not.
 	p.settled = true
+	p.collector.SetUpstream(kind.String())
 	if kind != UpstreamUnknown {
 		p.upstream.Store(int32(kind))
 		logUpstreamBehavior(kind)
@@ -207,9 +252,9 @@ const shutdownTimeout = 10 * time.Second
 // Start starts the proxy server and blocks until ctx is cancelled or the server
 // stops on its own. On cancellation it shuts down gracefully and returns nil.
 func (p *OllamaProxy) Start(ctx context.Context) error {
-	log.Printf("Starting Ollama proxy server on port %s", p.port)
+	log.Printf("Starting goophy proxy server on port %s", p.port)
 	log.Printf("Forwarding requests to: %s", p.targetURL)
-	if p.apiKey != "" {
+	if p.apiKey != "" || p.keySource != nil {
 		log.Print("API Key authentication enabled")
 	}
 
@@ -222,7 +267,7 @@ func (p *OllamaProxy) Start(ctx context.Context) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- p.server.ListenAndServe() }()
 
-	log.Printf("Ollama proxy server listening on %s", addr)
+	log.Printf("goophy proxy server listening on %s", addr)
 	if p.host == "127.0.0.1" || p.host == "localhost" || p.host == "::1" {
 		log.Print("Only local (loopback) connections are accepted; set HOST=0.0.0.0 (or --host 0.0.0.0) to allow external access")
 	}
@@ -251,13 +296,20 @@ func (p *OllamaProxy) newReverseProxy() *httputil.ReverseProxy {
 		originalPath := req.URL.Path
 		originalDirector(req)
 		req.Host = p.targetURL.Host
-		if p.apiKey != "" {
-			req.Header.Set("Authorization", bearer(p.apiKey))
+		if key, _ := req.Context().Value(apiKeyKey{}).(string); key != "" {
+			req.Header.Set("Authorization", bearer(key))
 		}
 		req.URL.Path = p.resolvePath(upstreamKindFrom(req.Context()), originalPath, req.URL.Path)
 	}
 
 	proxy.Transport = newCustomTransport(defaultMaxRedirects)
+	proxy.ModifyResponse = func(res *http.Response) error {
+		if res.StatusCode == http.StatusUnauthorized && p.onUnauthorized != nil {
+			key, _ := res.Request.Context().Value(apiKeyKey{}).(string)
+			p.onUnauthorized(key)
+		}
+		return nil
+	}
 	return proxy
 }
 
@@ -271,21 +323,157 @@ func (p *OllamaProxy) handle(proxy *httputil.ReverseProxy) http.HandlerFunc {
 		ctx = context.WithValue(ctx, upstreamKindKey{}, p.upstreamKind())
 		r = r.WithContext(ctx)
 
-		rewriteRequestBody(r)
+		if msg, ok := p.checkBrowser(w, r); !ok {
+			writeError(w, http.StatusForbidden, "goophy_forbidden", msg)
+			return
+		}
 
 		// Answer CORS preflight requests directly.
 		if r.Method == http.MethodOptions {
-			h := w.Header()
-			h.Set("Access-Control-Allow-Origin", "*")
-			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			h.Set("Access-Control-Allow-Headers", "*")
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		proxy.ServeHTTP(w, r)
+		// With the dashboard on, record the request and route the response
+		// through a trackingWriter (see track.go).
+		out := w
+		tracker := p.collector.Begin(r.Method, r.URL.Path, trimUA(r.Header.Get("User-Agent")))
+		if tracker != nil {
+			r = r.WithContext(context.WithValue(r.Context(), trackerKey{}, tracker))
+			tw := &trackingWriter{ResponseWriter: w, t: tracker}
+			out = tw
+			defer func() {
+				tw.finish()
+				tracker.Finish(finishError(r.Context()))
+			}()
+		}
+
+		body := rewriteRequestBody(r)
+
+		if tracker != nil {
+			if body == nil {
+				body = peekModelBody(r)
+			}
+			if body != nil {
+				tracker.SetModel(requestModel(body))
+				if injected, ok := injectStreamUsage(r.URL.Path, body); ok {
+					setRequestBody(r, injected)
+				}
+			}
+			// Let the transport negotiate (and transparently decode) compression
+			// with the upstream, so the usage scanner sees plain JSON. Clients get
+			// an uncompressed body, which is what LLM streams mostly are anyway.
+			if isLLMPath(r.URL.Path) {
+				r.Header.Del("Accept-Encoding")
+			}
+		}
+
+		key, err := p.key()
+		if err != nil {
+			writeAuthError(out, err)
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), apiKeyKey{}, key))
+		proxy.ServeHTTP(out, r)
 	}
+}
+
+// checkBrowser guards the proxy against web pages, and sets the CORS headers
+// for the ones it lets through. It reports false, with the reason, for a
+// request that must not be served.
+//
+// While goophy adds a key, any page the user opens could otherwise spend it
+// through http://127.0.0.1, and with a DNS rebinding (attacker.example
+// resolving to 127.0.0.1) even read the answers. So on a loopback address
+// only loopback Host names are served, and requests from browsers are served
+// only for allowed origins. Programs (curl, SDKs, editors) send no Origin and
+// are not affected. Without a key there is nothing to steal, and any origin
+// may call it, as before.
+func (p *OllamaProxy) checkBrowser(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if !p.addsKey() {
+		setCORS(w, "*")
+		return "", true
+	}
+	if isLoopbackName(p.host) && !localHostHeader(hostname(r.Host)) {
+		return fmt.Sprintf("goophy only answers to localhost, not to Host %q", r.Host), false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			return "goophy does not serve requests from other web sites", false
+		}
+		return "", true
+	}
+	if !p.originAllowed(origin) {
+		log.Printf("Refused a request from web page %s; add it to GOOPHY_ALLOWED_ORIGINS to allow it", origin)
+		return fmt.Sprintf("goophy does not serve web page %s; add it to GOOPHY_ALLOWED_ORIGINS to allow it", origin), false
+	}
+	setCORS(w, origin)
+	w.Header().Add("Vary", "Origin")
+	return "", true
+}
+
+func setCORS(w http.ResponseWriter, origin string) {
+	h := w.Header()
+	h.Set("Access-Control-Allow-Origin", origin)
+	h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	h.Set("Access-Control-Allow-Headers", "*")
+}
+
+// originAllowed reports whether a browser origin may use the proxy: a page
+// served from this machine, or one listed in allowedOrigins.
+func (p *OllamaProxy) originAllowed(origin string) bool {
+	for _, o := range p.allowedOrigins {
+		if o == "*" || strings.EqualFold(strings.TrimSuffix(o, "/"), origin) {
+			return true
+		}
+	}
+	u, err := url.Parse(origin)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && isLoopbackName(u.Hostname())
+}
+
+// hostname strips the port from a Host header.
+func hostname(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return strings.Trim(hostport, "[]")
+}
+
+// localHostHeader reports whether a Host header names this machine. Besides
+// loopback names that includes host.docker.internal, which containers use to
+// reach the host; it is not a name a web site can point at 127.0.0.1.
+func localHostHeader(host string) bool {
+	return isLoopbackName(host) || strings.EqualFold(host, "host.docker.internal")
+}
+
+// isLoopbackName reports whether host names this machine only.
+func isLoopbackName(host string) bool {
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// writeAuthError answers a request goophy cannot forward because it has no
+// usable key, saying what to do.
+func writeAuthError(w http.ResponseWriter, err error) {
+	writeError(w, http.StatusUnauthorized, "goophy_login", err.Error())
+}
+
+// writeError answers with an error in the shape OpenAI clients show
+// (error.message).
+func writeError(w http.ResponseWriter, status int, code, msg string) {
+	typ := "authentication_error"
+	if status == http.StatusForbidden {
+		typ = "permission_error"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]string{"message": msg, "type": typ, "code": code},
+	})
 }
 
 // resolvePath decides the upstream path for a request. It first applies
@@ -366,16 +554,17 @@ func (p *OllamaProxy) Stop() error {
 }
 
 // rewriteRequestBody normalizes model names in request bodies for the endpoints
-// that carry them, replacing r.Body with the processed bytes when changed.
-func rewriteRequestBody(r *http.Request) {
+// that carry them, replacing r.Body with the processed bytes when changed. It
+// returns the body as forwarded, or nil when the body wasn't read.
+func rewriteRequestBody(r *http.Request) []byte {
 	if r.Body == nil {
-		return
+		return nil
 	}
 	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
-		return
+		return nil
 	}
 	if !hasPathSuffix(r.URL.Path, modelBodyPaths) {
-		return
+		return nil
 	}
 
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -386,19 +575,20 @@ func rewriteRequestBody(r *http.Request) {
 		// leaving the original larger length would make the transport abort with a
 		// ContentLength/body mismatch instead of forwarding.
 		setRequestBody(r, bodyBytes)
-		return
+		return bodyBytes
 	}
 
 	processed, modified := processModelBody(r.URL.Path, bodyBytes)
 	if !modified {
 		setRequestBody(r, bodyBytes)
-		return
+		return bodyBytes
 	}
 
 	if Verbose.Load() {
 		log.Printf("Final forwarded body for %s: %s", r.URL.Path, processed)
 	}
 	setRequestBody(r, processed)
+	return processed
 }
 
 // setRequestBody replaces r.Body with b, keeping ContentLength and the
@@ -498,6 +688,7 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // logExchange logs a single request/response line, suppressing HEAD unless Verbose.
 func (t *customTransport) logExchange(req *http.Request, resp *http.Response) {
+	trackerFrom(req.Context()).SetUpstreamPath(req.URL.Path)
 	if req.Method == http.MethodHead && !Verbose.Load() {
 		return
 	}
@@ -542,6 +733,7 @@ func (t *customTransport) handleMissingModel(req *http.Request, resp *http.Respo
 	}
 
 	log.Printf("Successfully pulled model %q. Retrying original request...", modelName)
+	trackerFrom(req.Context()).SetNote("auto-pulled model")
 	retryReq, err := http.NewRequestWithContext(req.Context(), req.Method, req.URL.String(), bytes.NewReader(originalBody))
 	if err != nil {
 		log.Printf("Error recreating original request: %v", err)

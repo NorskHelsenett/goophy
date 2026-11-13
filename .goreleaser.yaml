@@ -65,6 +65,35 @@ archives:
       - goos: windows
         formats: [zip]
 
+# Homebrew cask, published to the NorskHelsenett/homebrew-tap repository:
+#   brew install norskhelsenett/tap/goophy
+# Only stable releases are published (not -rc prereleases), and only when the
+# HOMEBREW_TAP_GITHUB_TOKEN secret is set, so releases keep working without it.
+homebrew_casks:
+  - name: goophy
+    ids: [default]
+    binaries: [goophy]
+    homepage: https://github.com/NorskHelsenett/goophy
+    description: Authenticating proxy for Ollama, vLLM and OpenAI-compatible APIs
+    license: MIT
+    repository:
+      owner: NorskHelsenett
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    skip_upload: '{{ if or .Prerelease (eq (index .Env "HOMEBREW_TAP_GITHUB_TOKEN") "") }}true{{ else }}false{{ end }}'
+    commit_msg_template: "goophy {{ .Tag }}"
+    hooks:
+      post:
+        # The binaries aren't notarized; without this, Gatekeeper refuses to
+        # run a freshly downloaded goophy.
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/goophy"]
+          end
+    caveats: |
+      Upgrade with `brew upgrade goophy`; `goophy update` is disabled for Homebrew installs.
+
 changelog:
   sort: asc
   filters:
@@ -73,6 +102,9 @@ changelog:
       - "^test:"
 
 release:
+  # Tags like v0.3.0-rc.1 are previews: a prerelease is not GitHub's
+  # "latest release", so the self-updater does not offer it to everyone.
+  prerelease: auto
   footer: >-
 
     ---
