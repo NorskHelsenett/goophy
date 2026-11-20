@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/NorskHelsenett/goophy/internal/logsafe"
 )
 
 const (
@@ -22,7 +24,27 @@ const (
 	seriesLen = 120
 	// minutesLen is how many one-minute usage buckets are kept (24h).
 	minutesLen = 24 * 60
+	// maxKeys bounds the distinct clients and models tracked. Both are named
+	// by the caller (User-Agent, the body's "model"), so without a bound a
+	// client could grow the maps forever; later newcomers count as otherKey.
+	maxKeys = 500
+	// otherKey collects clients and models past maxKeys.
+	otherKey = "(other)"
+	// maxFieldLen bounds the length of a caller-supplied field kept per request.
+	maxFieldLen = 256
 )
+
+// field makes a caller-supplied value safe to keep and render: one line, no
+// terminal escapes, bounded length.
+func field(s string) string { return logsafe.Truncate(s, maxFieldLen) }
+
+// statsKey returns key, or otherKey when key is new and m already holds maxKeys keys.
+func statsKey[V any](m map[string]V, key string) string {
+	if _, ok := m[key]; ok || len(m) < maxKeys {
+		return key
+	}
+	return otherKey
+}
 
 // Request is one proxied request as seen by the dashboard.
 type Request struct {
@@ -234,7 +256,7 @@ func (c *Collector) Begin(method, path, userAgent string) *Tracker {
 	defer c.mu.Unlock()
 	c.nextID++
 	now := c.clock()
-	r := &Request{ID: c.nextID, Start: now, Method: method, Path: path, UserAgent: userAgent}
+	r := &Request{ID: c.nextID, Start: now, Method: field(method), Path: field(path), UserAgent: field(userAgent)}
 	c.active[r.ID] = r
 	c.bucket(now).Requests++
 	return &Tracker{c: c, r: r}
@@ -258,13 +280,16 @@ func (t *Tracker) update(f func(r *Request)) {
 }
 
 // SetModel records the requested model.
-func (t *Tracker) SetModel(m string) { t.update(func(r *Request) { r.Model = m }) }
+func (t *Tracker) SetModel(m string) { m = field(m); t.update(func(r *Request) { r.Model = m }) }
 
 // SetUpstreamPath records the routed upstream path.
-func (t *Tracker) SetUpstreamPath(p string) { t.update(func(r *Request) { r.UpstreamPath = p }) }
+func (t *Tracker) SetUpstreamPath(p string) {
+	p = field(p)
+	t.update(func(r *Request) { r.UpstreamPath = p })
+}
 
 // SetNote attaches a short note (e.g. "auto-pulled model").
-func (t *Tracker) SetNote(n string) { t.update(func(r *Request) { r.Note = n }) }
+func (t *Tracker) SetNote(n string) { n = field(n); t.update(func(r *Request) { r.Note = n }) }
 
 // SetStatus records the response status and whether the response is streamed.
 func (t *Tracker) SetStatus(code int, streaming bool) {
@@ -312,7 +337,7 @@ func (t *Tracker) Finish(errMsg string) {
 	now := c.clock()
 	r.Done = true
 	r.Duration = now.Sub(r.Start)
-	r.Error = errMsg
+	r.Error = logsafe.Truncate(errMsg, 4*maxFieldLen)
 	if !r.HasUsage && r.Chunks > 0 {
 		r.CompletionTokens = r.Chunks
 	}
@@ -338,6 +363,7 @@ func (t *Tracker) Finish(errMsg string) {
 	if client == "" {
 		client = "(unknown)"
 	}
+	client = statsKey(c.clients, client)
 	cs := c.clients[client]
 	if cs == nil {
 		cs = &ClientStats{Client: client}
@@ -361,10 +387,11 @@ func (t *Tracker) Finish(errMsg string) {
 	if r.Model == "" {
 		return
 	}
-	m := c.models[r.Model]
+	model := statsKey(c.models, r.Model)
+	m := c.models[model]
 	if m == nil {
-		m = &ModelStats{Model: r.Model}
-		c.models[r.Model] = m
+		m = &ModelStats{Model: model}
+		c.models[model] = m
 	}
 	m.Requests++
 	m.LastUsed = now
@@ -420,7 +447,9 @@ func (c *Collector) Write(p []byte) (int, error) {
 		if i < 0 {
 			break
 		}
-		line := string(c.logPartial[:i])
+		// Writers other than logsafe.Writer may reach here too: the lines
+		// end up on the dashboard, so never let escapes through.
+		line := logsafe.String(string(c.logPartial[:i]))
 		c.logPartial = c.logPartial[i+1:]
 		if strings.Contains(line, "New version available:") {
 			if _, after, ok := strings.Cut(line, "New version available: "); ok {

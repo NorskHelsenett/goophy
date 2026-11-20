@@ -38,6 +38,9 @@ type Live struct {
 	pending  sync.WaitGroup  // running checks, for tests
 }
 
+// maxNoted bounds how many refused requests noteEndpoint remembers.
+const maxNoted = 200
+
 // validFor is how long a confirmed login is trusted before a 401 is checked again.
 const validFor = time.Minute
 
@@ -123,7 +126,9 @@ func (l *Live) noteEndpoint(request string) {
 	if l.noted[request] {
 		return
 	}
-	if l.noted == nil {
+	// The request path comes from the client, so bound the dedup: past
+	// maxNoted, start over (a request may then be logged again).
+	if l.noted == nil || len(l.noted) >= maxNoted {
 		l.noted = map[string]bool{}
 	}
 	l.noted[request] = true
