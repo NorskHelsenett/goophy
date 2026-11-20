@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/NorskHelsenett/goophy/internal/clientcfg"
 )
 
@@ -50,75 +52,77 @@ func configureCommand(args []string) {
 
 	base := "http://localhost:" + resolve(*port, "PORT", "22434") + "/v1"
 	opts := clientcfg.Options{BaseURL: base, DefaultModel: *model, DryRun: *dryRun}
+	ui := newConfigureUI()
+	cwd, _ := os.Getwd()
+
 	if models, err := clientcfg.DiscoverModels(context.Background(), base); err == nil {
 		opts.Models = models
-		fmt.Printf("goophy at %s serves %d models.\n", base, len(models))
+		ids := make([]string, len(models))
+		for i, m := range models {
+			ids[i] = m.ID
+		}
+		ui.field("goophy", ui.ok.Render("running")+ui.dim.Render(" at "+base))
+		ui.field("models", strings.Join(ids, ", "))
 	} else {
-		fmt.Printf("goophy is not running at %s, so only %s and a few defaults are listed.\n", base, *model)
-		fmt.Printf("Start 'goophy serve' and run this again to list every model.\n")
+		ui.field("goophy", ui.warn.Render("not running")+ui.dim.Render(" at "+base))
+		ui.field("", ui.dim.Render("Listing "+*model+" and a few defaults. Start 'goophy serve' and run this again for every model."))
 	}
-	fmt.Printf("Default model: %s/%s\n\n", clientcfg.ProviderID, *model)
+	ui.field("default", ui.bold.Render(clientcfg.ProviderID+"/"+*model))
+	if *dryRun {
+		ui.field("dry run", "nothing is written")
+	}
+	fmt.Println()
 
 	var tips []string
 	failed := false
-	line := func(client, status string) { fmt.Printf("%-9s %s\n", client, status) }
-	detail := func(format string, a ...any) {
-		for _, l := range strings.Split(fmt.Sprintf(format, a...), "\n") {
-			fmt.Printf("%-9s %s\n", "", l)
-		}
-	}
-	fail := func(client string, err error) {
-		line(client, "failed")
-		detail("%v", err)
-		failed = true
-	}
-
 	for _, n := range names {
 		switch n {
 		case "opencode":
 			path, err := clientcfg.OpencodeConfigPath()
+			if err == nil && !explicit && !installed("opencode", filepath.Dir(path)) {
+				ui.skip(n, "not installed")
+				continue
+			}
+			var r clientcfg.Result
+			if err == nil {
+				r, err = clientcfg.ConfigureOpencode(path, opts)
+			}
 			if err != nil {
-				fail(n, err)
+				ui.fail(n, explainConfigErr(err))
+				failed = true
 				continue
 			}
-			if !explicit && !installed("opencode", filepath.Dir(path)) {
-				line(n, "not installed, skipped")
-				continue
-			}
-			r, err := clientcfg.ConfigureOpencode(path, opts)
-			if err != nil {
-				fail(n, explainConfigErr(err))
-				continue
-			}
-			describe(n, []clientcfg.Result{r}, *dryRun, line, detail)
-			if r.Changed {
-				tips = append(tips, "opencode now loads only the goophy provider; do not put cloud API keys in its auth.json.")
+			ui.client(n, filepath.Dir(path), []clientcfg.Result{r}, *dryRun)
+			ui.warnings(clientcfg.OpencodeWarnings(path, cwd))
+			if r.Changed && !*dryRun {
+				tips = append(tips, "opencode now loads only the goophy provider; keep cloud API keys out of its auth.json.")
 			}
 		case "pi":
 			dir, err := clientcfg.PiAgentDir()
+			if err == nil && !explicit && !installed("pi", filepath.Dir(dir)) {
+				ui.skip(n, "not installed")
+				continue
+			}
+			var rs []clientcfg.Result
+			if err == nil {
+				rs, err = clientcfg.ConfigurePi(dir, opts)
+			}
 			if err != nil {
-				fail(n, err)
+				ui.fail(n, explainConfigErr(err))
+				failed = true
 				continue
 			}
-			if !explicit && !installed("pi", filepath.Dir(dir)) {
-				line(n, "not installed, skipped")
-				continue
-			}
-			rs, err := clientcfg.ConfigurePi(dir, opts)
-			if err != nil {
-				fail(n, explainConfigErr(err))
-				continue
-			}
-			describe(n, rs, *dryRun, line, detail)
+			ui.client(n, dir, rs, *dryRun)
+			ui.warnings(clientcfg.PiWarnings(dir, cwd))
 			if os.Getenv("PI_SKIP_VERSION_CHECK") == "" {
-				tips = append(tips, "To stop pi checking pi.dev for updates, export PI_SKIP_VERSION_CHECK=1.")
+				tips = append(tips, "export PI_SKIP_VERSION_CHECK=1 to stop pi checking pi.dev for updates.")
 			}
 		}
 	}
 	if len(tips) > 0 {
 		fmt.Println()
 		for _, t := range tips {
-			fmt.Println("Tip: " + t)
+			fmt.Println(ui.dim.Render("tip  ") + t)
 		}
 	}
 	if failed {
@@ -126,33 +130,113 @@ func configureCommand(args []string) {
 	}
 }
 
-// describe prints one client's outcome: a status line, then a line per file
-// that changed.
-func describe(client string, rs []clientcfg.Result, dryRun bool, line func(string, string), detail func(string, ...any)) {
+// configureUI prints configure's report: coloured in a terminal, plain when
+// piped or with NO_COLOR set (lipgloss detects both).
+type configureUI struct {
+	ok, warn, bad, dim, bold, key lipgloss.Style
+}
+
+func newConfigureUI() configureUI {
+	s := lipgloss.NewStyle()
+	return configureUI{
+		ok:   s.Foreground(lipgloss.Color("2")),
+		warn: s.Foreground(lipgloss.Color("3")),
+		bad:  s.Foreground(lipgloss.Color("1")),
+		dim:  s.Faint(true),
+		bold: s.Bold(true),
+		key:  s.Foreground(lipgloss.Color("6")),
+	}
+}
+
+// field prints a header line: "label    value".
+func (u configureUI) field(label, value string) {
+	fmt.Printf("%s %s\n", u.dim.Render(fmt.Sprintf("%-8s", label)), value)
+}
+
+// head prints a client's status line.
+func (u configureUI) head(mark lipgloss.Style, sym, client, status, where string) {
+	line := mark.Render(sym) + " " + u.bold.Render(fmt.Sprintf("%-10s", client)) + status
+	if where != "" {
+		line += u.dim.Render("  " + where)
+	}
+	fmt.Println(line)
+}
+
+// sub prints an indented detail line under a client.
+func (u configureUI) sub(text string) {
+	for _, l := range strings.Split(text, "\n") {
+		fmt.Println("            " + l)
+	}
+}
+
+func (u configureUI) skip(client, why string) {
+	u.head(u.dim, "-", client, u.dim.Render(why+", skipped"), "")
+}
+
+func (u configureUI) fail(client string, err error) {
+	u.head(u.bad, "✗", client, u.bad.Render("failed"), "")
+	u.sub(err.Error())
+}
+
+func (u configureUI) warnings(ws []string) {
+	for _, w := range ws {
+		u.sub(u.warn.Render("! ") + w)
+	}
+}
+
+// client prints one client's outcome: the status, then per changed file the
+// settings set or replaced, models added and where the original is kept.
+func (u configureUI) client(name, dir string, rs []clientcfg.Result, dryRun bool) {
 	var changed []clientcfg.Result
 	for _, r := range rs {
 		if r.Changed {
 			changed = append(changed, r)
 		}
 	}
-	switch {
-	case len(changed) == 0:
-		line(client, "already set up")
+	if len(changed) == 0 {
+		u.head(u.ok, "✓", name, u.ok.Render("already set up"), tildePath(dir))
 		return
-	case dryRun:
-		line(client, "would update")
-	default:
-		line(client, "updated")
 	}
+	status := "updated"
+	if dryRun {
+		status = "would update"
+	}
+	u.head(u.warn, "●", name, u.warn.Render(status), tildePath(dir))
 	for _, r := range changed {
-		switch {
-		case r.BackupKept:
-			detail("%s (your original is in %s)", tildePath(r.Path), filepath.Base(r.Backup))
-		case r.Backup != "":
-			detail("%s (backup: %s)", tildePath(r.Path), filepath.Base(r.Backup))
-		default:
-			detail("%s (new)", tildePath(r.Path))
+		rel, err := filepath.Rel(dir, r.Path)
+		if err != nil {
+			rel = r.Path
 		}
+		u.sub(rel + u.dim.Render(backupNote(r)))
+		width := 0
+		for _, c := range r.Changes {
+			width = max(width, len(c.Key))
+		}
+		for _, c := range r.Changes {
+			k := u.key.Render(fmt.Sprintf("%-*s", width, c.Key))
+			if c.Old == "" {
+				u.sub("  " + k + "  " + c.New)
+			} else {
+				u.sub("  " + k + "  " + u.dim.Render(c.Old+" → ") + c.New)
+			}
+		}
+		if len(r.AddedModels) > 0 {
+			u.sub("  " + u.ok.Render("+ ") + strings.Join(r.AddedModels, ", "))
+		}
+		if len(r.Changes) == 0 && len(r.AddedModels) == 0 && r.Backup != "" {
+			u.sub("  " + u.dim.Render("goophy's version of this file"))
+		}
+	}
+}
+
+func backupNote(r clientcfg.Result) string {
+	switch {
+	case r.BackupKept:
+		return "  (your original stays in " + filepath.Base(r.Backup) + ")"
+	case r.Backup != "":
+		return "  (original saved as " + filepath.Base(r.Backup) + ")"
+	default:
+		return "  (new)"
 	}
 }
 
@@ -161,7 +245,7 @@ func explainConfigErr(err error) error {
 	var se *json.SyntaxError
 	var te *json.UnmarshalTypeError
 	if errors.As(err, &se) || errors.As(err, &te) || strings.Contains(err.Error(), "not a JSON object") {
-		return fmt.Errorf("%v\nFix the file, or move it aside and run this again; nothing was changed", err)
+		return fmt.Errorf("%v\nFix the file, or move it aside and run this again. Nothing was changed", err)
 	}
 	return err
 }

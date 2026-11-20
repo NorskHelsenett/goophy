@@ -178,6 +178,13 @@ Other settings are kept, but the files are rewritten as plain JSON: comments
 are dropped and keys sorted. The file as it was before goophy first changed it
 is saved next to it as `.bak`. Rerunning `goophy configure` is safe.
 
+The report lists each setting it sets and the value it replaces (try
+`--dry-run` first), and the models it adds. It also warns about other configs
+that override these settings: a project `opencode.json` or `.pi/settings.json`
+that sets the model, opencode's `OPENCODE_CONFIG*` variables or a sibling
+`opencode.jsonc`, and a `goophy` provider in pi's `models.json`. It never
+changes those files.
+
 ## Supported upstreams
 
 goophy is not Ollama-only. At startup it probes `API_ENDPOINT` to identify the

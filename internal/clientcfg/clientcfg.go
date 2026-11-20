@@ -57,6 +57,46 @@ type Result struct {
 	// BackupKept is set when Backup already existed and was left as is: it
 	// holds the file from before goophy first changed it.
 	BackupKept bool
+	// Changes are the settings this run sets or replaces, in order.
+	Changes []Change
+	// AddedModels are model IDs added to the client's list.
+	AddedModels []string
+}
+
+// Change is one setting goophy sets. Old is "" when the key was not there.
+type Change struct {
+	Key, Old, New string
+}
+
+// changes records what set() does to a config, for the report.
+type changes []Change
+
+// set assigns m[key] = v and records it when the value differs. label names
+// the key in the report.
+func (c *changes) set(m map[string]any, key, label string, v any) {
+	oldV, had := m[key]
+	m[key] = v
+	o, n := brief(oldV), brief(v)
+	if had && o == n {
+		return
+	}
+	if !had {
+		o = ""
+	}
+	*c = append(*c, Change{Key: label, Old: o, New: n})
+}
+
+// brief renders a JSON value on one short line.
+func brief(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	s := string(b)
+	if len(s) > 48 {
+		s = s[:45] + "..."
+	}
+	return s
 }
 
 var nonChat = regexp.MustCompile(`(?i)(embedding|reranker|embed-)`)
@@ -141,34 +181,40 @@ func ConfigureOpencode(path string, o Options) (Result, error) {
 	if err != nil {
 		return Result{Path: path}, err
 	}
+	var ch changes
 	if _, ok := cfg["$schema"]; !ok {
 		cfg["$schema"] = "https://opencode.ai/config.json"
 	}
-	cfg["autoupdate"] = false
-	cfg["share"] = "disabled"
-	cfg["enabled_providers"] = []any{ProviderID}
-	cfg["model"] = ProviderID + "/" + o.DefaultModel
+	ch.set(cfg, "model", "model", ProviderID+"/"+o.DefaultModel)
+	ch.set(cfg, "enabled_providers", "enabled_providers", []any{ProviderID})
+	ch.set(cfg, "autoupdate", "autoupdate", false)
+	ch.set(cfg, "share", "share", "disabled")
 
 	providers := asMap(cfg["provider"])
 	p := asMap(providers[ProviderID])
-	p["npm"] = "@ai-sdk/openai-compatible"
+	ch.set(p, "npm", "provider.goophy.npm", "@ai-sdk/openai-compatible")
 	if _, ok := p["name"]; !ok {
 		p["name"] = "Goophy"
 	}
 	opts := asMap(p["options"])
-	opts["baseURL"] = o.BaseURL
+	ch.set(opts, "baseURL", "provider.goophy.baseURL", o.BaseURL)
 	p["options"] = opts
 	// Keep the user's per-model tweaks (limits, names); add what is missing.
+	var added []string
 	models := asMap(p["models"])
 	for _, m := range o.catalog() {
 		entry, ok := models[m.ID].(map[string]any)
 		if !ok {
 			entry = map[string]any{"name": m.ID}
+			added = append(added, m.ID)
 		}
 		// Fill in limits learnt from a running goophy, without touching
 		// limits the user set.
 		if _, has := entry["limit"]; !has && m.ContextWindow > 0 {
 			entry["limit"] = map[string]any{"context": m.ContextWindow, "output": outputCap(m.ContextWindow)}
+			if ok {
+				ch = append(ch, Change{Key: "models." + m.ID + ".limit", New: fmt.Sprintf("context %d", m.ContextWindow)})
+			}
 		}
 		models[m.ID] = entry
 	}
@@ -180,7 +226,11 @@ func ConfigureOpencode(path string, o Options) (Result, error) {
 	if err != nil {
 		return Result{Path: path}, err
 	}
-	return writeWithBackup(path, old, data, o.DryRun)
+	r, err := writeWithBackup(path, old, data, o.DryRun)
+	if r.Changed {
+		r.Changes, r.AddedModels = ch, added
+	}
+	return r, err
 }
 
 // ---- pi -------------------------------------------------------------------
@@ -221,12 +271,13 @@ func ConfigurePi(dir string, o Options) ([]Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	settings["defaultProvider"] = ProviderID
-	settings["defaultModel"] = o.DefaultModel
+	var ch changes
+	ch.set(settings, "defaultProvider", "defaultProvider", ProviderID)
+	ch.set(settings, "defaultModel", "defaultModel", o.DefaultModel)
 	// No install/update reporting or analytics. pi's pi.dev version check has
 	// no setting; it is switched off with PI_SKIP_VERSION_CHECK=1.
-	settings["enableInstallTelemetry"] = false
-	settings["enableAnalytics"] = false
+	ch.set(settings, "enableInstallTelemetry", "enableInstallTelemetry", false)
+	ch.set(settings, "enableAnalytics", "enableAnalytics", false)
 	setData, err := marshal(settings)
 	if err != nil {
 		return nil, err
@@ -241,6 +292,9 @@ func ConfigurePi(dir string, o Options) ([]Result, error) {
 		return []Result{ext}, err
 	}
 	set, err := writeWithBackup(setPath, oldSet, setData, o.DryRun)
+	if set.Changed {
+		set.Changes = ch
+	}
 	return []Result{ext, set}, err
 }
 

@@ -222,3 +222,62 @@ func TestKeepsHTMLAndBigNumbers(t *testing.T) {
 		t.Errorf("rewritten lossy:\n%s", b)
 	}
 }
+
+func TestReportsChanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(path, []byte(`{"model":"anthropic/x","share":"disabled","provider":{"goophy":{"models":{"nhn-coder":{}}}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := ConfigureOpencode(path, Options{BaseURL: "http://l/v1", DefaultModel: "nhn-coder", Models: []Model{{ID: "nhn-coder"}, {ID: "nhn-large"}}, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Change{}
+	for _, c := range r.Changes {
+		got[c.Key] = c
+	}
+	if c := got["model"]; c.Old != `"anthropic/x"` || c.New != `"goophy/nhn-coder"` {
+		t.Errorf("model change %+v", c)
+	}
+	if _, ok := got["share"]; ok {
+		t.Error("unchanged share reported")
+	}
+	if c := got["autoupdate"]; c.Old != "" || c.New != "false" {
+		t.Errorf("autoupdate change %+v", c)
+	}
+	if len(r.AddedModels) != 1 || r.AddedModels[0] != "nhn-large" {
+		t.Errorf("added %v", r.AddedModels)
+	}
+}
+
+func TestWarnings(t *testing.T) {
+	root := t.TempDir()
+	global := filepath.Join(root, "cfg", "opencode", "opencode.json")
+	repo := filepath.Join(root, "repo")
+	sub := filepath.Join(repo, "sub")
+	for _, d := range []string{filepath.Dir(global), filepath.Join(repo, ".git"), filepath.Join(sub, ".pi"), filepath.Join(root, "agent")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(p, s string) {
+		if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(filepath.Dir(global), "opencode.jsonc"), `{"theme":"x"}`) // sets nothing relevant
+	write(filepath.Join(repo, "opencode.json"), `{"model":"openai/x"}`)
+	write(filepath.Join(root, "opencode.json"), `{"model":"y"}`) // above the repo: not scanned
+	write(filepath.Join(sub, ".pi", "settings.json"), `{"defaultModel":"z"}`)
+	write(filepath.Join(root, "agent", "models.json"), `{"providers":{"goophy":{}}}`)
+	t.Setenv("OPENCODE_CONFIG", "")
+
+	ow := OpencodeWarnings(global, sub)
+	if len(ow) != 1 || !strings.Contains(ow[0], filepath.Join("repo", "opencode.json")) || !strings.Contains(ow[0], "model") {
+		t.Errorf("opencode warnings %q", ow)
+	}
+	pw := PiWarnings(filepath.Join(root, "agent"), sub)
+	if len(pw) != 2 {
+		t.Errorf("pi warnings %q", pw)
+	}
+}
