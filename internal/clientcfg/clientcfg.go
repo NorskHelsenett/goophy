@@ -181,6 +181,29 @@ func ConfigureOpencode(path string, o Options) (Result, error) {
 	if err != nil {
 		return Result{Path: path}, err
 	}
+	ch, added := mergeOpencode(cfg, o)
+	data, err := marshal(cfg)
+	if err != nil {
+		return Result{Path: path}, err
+	}
+	r, err := writeWithBackup(path, old, data, o.DryRun)
+	if r.Changed {
+		r.Changes, r.AddedModels = ch, added
+	}
+	return r, err
+}
+
+// OpencodeSnippet is what ConfigureOpencode merges in, as a config of its
+// own, for users who edit the file themselves.
+func OpencodeSnippet(o Options) []byte {
+	cfg := map[string]any{}
+	mergeOpencode(cfg, o)
+	b, _ := marshal(cfg)
+	return b
+}
+
+// mergeOpencode sets goophy's settings in cfg and reports what it changed.
+func mergeOpencode(cfg map[string]any, o Options) (changes, []string) {
 	var ch changes
 	if _, ok := cfg["$schema"]; !ok {
 		cfg["$schema"] = "https://opencode.ai/config.json"
@@ -221,16 +244,7 @@ func ConfigureOpencode(path string, o Options) (Result, error) {
 	p["models"] = models
 	providers[ProviderID] = p
 	cfg["provider"] = providers
-
-	data, err := marshal(cfg)
-	if err != nil {
-		return Result{Path: path}, err
-	}
-	r, err := writeWithBackup(path, old, data, o.DryRun)
-	if r.Changed {
-		r.Changes, r.AddedModels = ch, added
-	}
-	return r, err
+	return ch, added
 }
 
 // ---- pi -------------------------------------------------------------------
@@ -271,13 +285,7 @@ func ConfigurePi(dir string, o Options) ([]Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	var ch changes
-	ch.set(settings, "defaultProvider", "defaultProvider", ProviderID)
-	ch.set(settings, "defaultModel", "defaultModel", o.DefaultModel)
-	// No install/update reporting or analytics. pi's pi.dev version check has
-	// no setting; it is switched off with PI_SKIP_VERSION_CHECK=1.
-	ch.set(settings, "enableInstallTelemetry", "enableInstallTelemetry", false)
-	ch.set(settings, "enableAnalytics", "enableAnalytics", false)
+	ch := mergePiSettings(settings, o)
 	setData, err := marshal(settings)
 	if err != nil {
 		return nil, err
@@ -296,6 +304,25 @@ func ConfigurePi(dir string, o Options) ([]Result, error) {
 		set.Changes = ch
 	}
 	return []Result{ext, set}, err
+}
+
+// PiSettingsSnippet is what ConfigurePi merges into settings.json.
+func PiSettingsSnippet(o Options) []byte {
+	cfg := map[string]any{}
+	mergePiSettings(cfg, o)
+	b, _ := marshal(cfg)
+	return b
+}
+
+func mergePiSettings(settings map[string]any, o Options) changes {
+	var ch changes
+	ch.set(settings, "defaultProvider", "defaultProvider", ProviderID)
+	ch.set(settings, "defaultModel", "defaultModel", o.DefaultModel)
+	// No install/update reporting or analytics. pi's pi.dev version check has
+	// no setting; it is switched off with PI_SKIP_VERSION_CHECK=1.
+	ch.set(settings, "enableInstallTelemetry", "enableInstallTelemetry", false)
+	ch.set(settings, "enableAnalytics", "enableAnalytics", false)
+	return ch
 }
 
 // ---- helpers --------------------------------------------------------------

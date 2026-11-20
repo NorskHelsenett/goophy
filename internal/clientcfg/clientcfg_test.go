@@ -252,10 +252,9 @@ func TestReportsChanges(t *testing.T) {
 
 func TestWarnings(t *testing.T) {
 	root := t.TempDir()
-	global := filepath.Join(root, "cfg", "opencode", "opencode.json")
-	repo := filepath.Join(root, "repo")
-	sub := filepath.Join(repo, "sub")
-	for _, d := range []string{filepath.Dir(global), filepath.Join(repo, ".git"), filepath.Join(sub, ".pi"), filepath.Join(root, "agent")} {
+	global := filepath.Join(root, "opencode", "opencode.json")
+	agent := filepath.Join(root, "agent")
+	for _, d := range []string{filepath.Dir(global), agent} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -265,19 +264,39 @@ func TestWarnings(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write(filepath.Join(filepath.Dir(global), "opencode.jsonc"), `{"theme":"x"}`) // sets nothing relevant
-	write(filepath.Join(repo, "opencode.json"), `{"model":"openai/x"}`)
-	write(filepath.Join(root, "opencode.json"), `{"model":"y"}`) // above the repo: not scanned
-	write(filepath.Join(sub, ".pi", "settings.json"), `{"defaultModel":"z"}`)
-	write(filepath.Join(root, "agent", "models.json"), `{"providers":{"goophy":{}}}`)
-	t.Setenv("OPENCODE_CONFIG", "")
+	write(filepath.Join(filepath.Dir(global), "config.json"), `{"theme":"x"}`) // sets nothing relevant
+	write(filepath.Join(filepath.Dir(global), "opencode.jsonc"), `{"model":"openai/x", // c
+}`)
+	write(filepath.Join(agent, "models.json"), `{"providers":{"goophy":{}}}`)
+	for _, e := range []string{"OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR"} {
+		t.Setenv(e, "")
+	}
 
-	ow := OpencodeWarnings(global, sub)
-	if len(ow) != 1 || !strings.Contains(ow[0], filepath.Join("repo", "opencode.json")) || !strings.Contains(ow[0], "model") {
+	ow := OpencodeWarnings(global)
+	if len(ow) != 1 || !strings.Contains(ow[0], "opencode.jsonc") || !strings.Contains(ow[0], "model") {
 		t.Errorf("opencode warnings %q", ow)
 	}
-	pw := PiWarnings(filepath.Join(root, "agent"), sub)
-	if len(pw) != 2 {
+	t.Setenv("OPENCODE_CONFIG", "/x.json")
+	if ow := OpencodeWarnings(global); len(ow) != 2 {
+		t.Errorf("with OPENCODE_CONFIG: %q", ow)
+	}
+	if pw := PiWarnings(agent); len(pw) != 1 || !strings.Contains(pw[0], "models.json") {
 		t.Errorf("pi warnings %q", pw)
+	}
+}
+
+func TestSnippetsMatchWhatIsWritten(t *testing.T) {
+	o := Options{BaseURL: "http://localhost:22434/v1", DefaultModel: "nhn-coder"}
+	path := filepath.Join(t.TempDir(), "opencode.json")
+	if _, err := ConfigureOpencode(path, o); err != nil {
+		t.Fatal(err)
+	}
+	written, _ := os.ReadFile(path)
+	if string(written) != string(OpencodeSnippet(o)) {
+		t.Errorf("snippet differs from a fresh config:\n%s\nvs\n%s", OpencodeSnippet(o), written)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(PiSettingsSnippet(o), &v); err != nil || v["defaultModel"] != "nhn-coder" {
+		t.Errorf("pi snippet %s (%v)", PiSettingsSnippet(o), err)
 	}
 }

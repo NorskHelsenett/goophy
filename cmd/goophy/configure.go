@@ -23,8 +23,9 @@ func configureCommand(args []string) {
 	port := fs.String("port", "", "Port goophy serves on (default $PORT or 22434)")
 	model := fs.String("model", "nhn-coder", "Default model for the clients")
 	dryRun := fs.Bool("dry-run", false, "Show which files would change without writing them")
+	printOnly := fs.Bool("print", false, "Print the settings to add by hand instead of writing them")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: goophy configure [opencode|pi]... [--model M] [--port P] [--dry-run]\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: goophy configure [opencode|pi]... [--model M] [--port P] [--dry-run] [--print]\n\n")
 		fmt.Fprintf(os.Stderr, "Points coding agents at the local goophy. Without a name it configures each\n")
 		fmt.Fprintf(os.Stderr, "of opencode and pi that is installed.\n\n")
 		fmt.Fprintf(os.Stderr, "  opencode  ~/.config/opencode/opencode.json: provider \"goophy\" as the only\n")
@@ -32,7 +33,8 @@ func configureCommand(args []string) {
 		fmt.Fprintf(os.Stderr, "            to opencode.ai disabled.\n")
 		fmt.Fprintf(os.Stderr, "  pi        ~/.pi/agent/extensions/goophy.ts (models discovered from goophy)\n")
 		fmt.Fprintf(os.Stderr, "            and settings.json: goophy default, telemetry off.\n\n")
-		fmt.Fprintf(os.Stderr, "Other settings are kept; a changed file's previous content is saved as .bak.\n\n")
+		fmt.Fprintf(os.Stderr, "Other settings are kept; a changed file's previous content is saved as .bak.\n")
+		fmt.Fprintf(os.Stderr, "With --print nothing is written: it prints what to put in each file.\n\n")
 		fs.PrintDefaults()
 	}
 	flags, names := splitFlagsAndNames(args)
@@ -53,7 +55,16 @@ func configureCommand(args []string) {
 	base := "http://localhost:" + resolve(*port, "PORT", "22434") + "/v1"
 	opts := clientcfg.Options{BaseURL: base, DefaultModel: *model, DryRun: *dryRun}
 	ui := newConfigureUI()
-	cwd, _ := os.Getwd()
+	if *printOnly {
+		// Only the settings go to stdout, so they can be redirected to a file.
+		if models, err := clientcfg.DiscoverModels(context.Background(), base); err == nil {
+			opts.Models = models
+		} else {
+			fmt.Fprintf(os.Stderr, "goophy is not running at %s; listing %s and a few defaults.\n\n", base, *model)
+		}
+		printConfigs(names, opts)
+		return
+	}
 
 	if models, err := clientcfg.DiscoverModels(context.Background(), base); err == nil {
 		opts.Models = models
@@ -80,7 +91,7 @@ func configureCommand(args []string) {
 		case "opencode":
 			path, err := clientcfg.OpencodeConfigPath()
 			if err == nil && !explicit && !installed("opencode", filepath.Dir(path)) {
-				ui.skip(n, "not installed")
+				ui.notFound(n)
 				continue
 			}
 			var r clientcfg.Result
@@ -93,14 +104,14 @@ func configureCommand(args []string) {
 				continue
 			}
 			ui.client(n, filepath.Dir(path), []clientcfg.Result{r}, *dryRun)
-			ui.warnings(clientcfg.OpencodeWarnings(path, cwd))
+			ui.warnings(clientcfg.OpencodeWarnings(path))
 			if r.Changed && !*dryRun {
 				tips = append(tips, "opencode now loads only the goophy provider; keep cloud API keys out of its auth.json.")
 			}
 		case "pi":
 			dir, err := clientcfg.PiAgentDir()
 			if err == nil && !explicit && !installed("pi", filepath.Dir(dir)) {
-				ui.skip(n, "not installed")
+				ui.notFound(n)
 				continue
 			}
 			var rs []clientcfg.Result
@@ -113,7 +124,7 @@ func configureCommand(args []string) {
 				continue
 			}
 			ui.client(n, dir, rs, *dryRun)
-			ui.warnings(clientcfg.PiWarnings(dir, cwd))
+			ui.warnings(clientcfg.PiWarnings(dir))
 			if os.Getenv("PI_SKIP_VERSION_CHECK") == "" {
 				tips = append(tips, "export PI_SKIP_VERSION_CHECK=1 to stop pi checking pi.dev for updates.")
 			}
@@ -169,8 +180,10 @@ func (u configureUI) sub(text string) {
 	}
 }
 
-func (u configureUI) skip(client, why string) {
-	u.head(u.dim, "-", client, u.dim.Render(why+", skipped"), "")
+func (u configureUI) notFound(client string) {
+	u.head(u.dim, "-", client, u.dim.Render("not found, skipped"), "")
+	u.sub(u.dim.Render("Installed somewhere else? Run 'goophy configure " + client + "' to set it up anyway,"))
+	u.sub(u.dim.Render("or 'goophy configure " + client + " --print' to see what to add by hand."))
 }
 
 func (u configureUI) fail(client string, err error) {
@@ -260,14 +273,67 @@ func tildePath(p string) string {
 	return p
 }
 
-// installed reports whether a client's binary is on PATH or its config
-// directory exists.
-func installed(bin, dir string) bool {
+// installed reports whether a client is installed: its binary on PATH or in
+// a usual install directory on macOS and Linux, or its config directory.
+func installed(bin, configDir string) bool {
 	if _, err := exec.LookPath(bin); err == nil {
 		return true
 	}
-	_, err := os.Stat(dir)
-	return err == nil
+	if _, err := os.Stat(configDir); err == nil {
+		return true
+	}
+	home, _ := os.UserHomeDir()
+	dirs := []string{
+		"/opt/homebrew/bin",              // Homebrew on Apple silicon
+		"/usr/local/bin",                 // Homebrew on Intel, manual installs
+		"/home/linuxbrew/.linuxbrew/bin", // Homebrew on Linux
+		"/usr/bin",
+		"/snap/bin",
+	}
+	if home != "" {
+		dirs = append(dirs,
+			filepath.Join(home, ".local", "bin"),    // pi's and opencode's install scripts
+			filepath.Join(home, ".opencode", "bin"), // opencode's install script
+			filepath.Join(home, ".bun", "bin"),
+			filepath.Join(home, ".npm-global", "bin"),
+			filepath.Join(home, ".volta", "bin"),
+		)
+	}
+	for _, d := range dirs {
+		if fi, err := os.Stat(filepath.Join(d, bin)); err == nil && !fi.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// printConfigs prints, for each client, the file to edit and what goes in
+// it, for users who would rather edit the files themselves.
+func printConfigs(names []string, opts clientcfg.Options) {
+	for i, n := range names {
+		if i > 0 {
+			fmt.Println()
+		}
+		switch n {
+		case "opencode":
+			path, err := clientcfg.OpencodeConfigPath()
+			if err != nil {
+				fatal(err)
+			}
+			fmt.Printf("# opencode: merge these keys into %s\n", tildePath(path))
+			fmt.Printf("# (create the file with exactly this if it does not exist)\n")
+			fmt.Print(string(clientcfg.OpencodeSnippet(opts)))
+		case "pi":
+			dir, err := clientcfg.PiAgentDir()
+			if err != nil {
+				fatal(err)
+			}
+			fmt.Printf("# pi: merge these keys into %s\n", tildePath(filepath.Join(dir, "settings.json")))
+			fmt.Print(string(clientcfg.PiSettingsSnippet(opts)))
+			fmt.Printf("\n# pi: save this as %s\n", tildePath(filepath.Join(dir, "extensions", "goophy.ts")))
+			fmt.Print(clientcfg.PiExtension(opts))
+		}
+	}
 }
 
 // splitFlagsAndNames lets client names come before flags

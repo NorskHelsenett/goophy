@@ -158,7 +158,7 @@ origin is allowed, as before.
 
 ```bash
 goophy configure              # each of opencode and pi that is installed
-goophy configure opencode     # or just one; --model, --port, --dry-run
+goophy configure opencode     # or just one; --model, --port, --dry-run, --print
 ```
 
 - **opencode** (`~/.config/opencode/opencode.json`): adds the provider
@@ -179,11 +179,20 @@ are dropped and keys sorted. The file as it was before goophy first changed it
 is saved next to it as `.bak`. Rerunning `goophy configure` is safe.
 
 The report lists each setting it sets and the value it replaces (try
-`--dry-run` first), and the models it adds. It also warns about other configs
-that override these settings: a project `opencode.json` or `.pi/settings.json`
-that sets the model, opencode's `OPENCODE_CONFIG*` variables or a sibling
-`opencode.jsonc`, and a `goophy` provider in pi's `models.json`. It never
-changes those files.
+`--dry-run` first), and the models it adds. It also warns about user-level
+configs that override these settings: opencode's `OPENCODE_CONFIG*`
+variables or a sibling `opencode.jsonc`/`config.json`, and a `goophy` provider
+in pi's `models.json`. It never changes those files. Project configs (a
+repository's `opencode.json` or `.pi/settings.json`) are not checked.
+
+A client counts as installed when its binary is on `PATH` or in a usual
+install directory (Homebrew, `~/.local/bin`, `~/.opencode/bin`, `~/.bun/bin`,
+...) or its config directory exists; others are skipped. Name a client to
+configure it anyway, or add `--print` to get the settings to enter by hand:
+
+```bash
+goophy configure opencode --print   # writes nothing; the settings go to stdout
+```
 
 ## Supported upstreams
 
