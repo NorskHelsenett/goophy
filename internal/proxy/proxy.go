@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/NorskHelsenett/goophy/internal/logsafe"
 	"github.com/NorskHelsenett/goophy/internal/stats"
 )
 
@@ -251,6 +252,19 @@ func (p *OllamaProxy) upstreamKind() UpstreamKind {
 // shutdownTimeout bounds how long Start waits for in-flight requests to drain.
 const shutdownTimeout = 10 * time.Second
 
+const (
+	// maxBufferedBody bounds a request body goophy reads into memory (to
+	// rewrite the model, record it, or replay it after an auto-pull). Chat
+	// requests carry base64 images, so this is generous. Bodies goophy only
+	// streams through are not limited.
+	maxBufferedBody = 128 << 20
+	// maxErrorBody bounds how much of an upstream error response is buffered
+	// for inspection; the rest still streams to the client.
+	maxErrorBody = 1 << 20
+	// maxLoggedBody bounds how much of an upstream error body is logged.
+	maxLoggedBody = 2 << 10
+)
+
 // Start starts the proxy server and blocks until ctx is cancelled or the server
 // stops on its own. On cancellation it shuts down gracefully and returns nil.
 func (p *OllamaProxy) Start(ctx context.Context) error {
@@ -264,6 +278,10 @@ func (p *OllamaProxy) Start(ctx context.Context) error {
 	p.server = &http.Server{
 		Addr:    addr,
 		Handler: http.HandlerFunc(p.handle(p.newReverseProxy())),
+		// Bound slow clients without cutting off long LLM streams: no
+		// ReadTimeout or WriteTimeout, which would cap a whole request.
+		ReadHeaderTimeout: 30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 
 	serveErr := make(chan error, 1)
@@ -308,7 +326,7 @@ func (p *OllamaProxy) newReverseProxy() *httputil.ReverseProxy {
 	proxy.ModifyResponse = func(res *http.Response) error {
 		if res.StatusCode == http.StatusUnauthorized && p.onUnauthorized != nil {
 			key, _ := res.Request.Context().Value(apiKeyKey{}).(string)
-			p.onUnauthorized(key, res.Request.Method+" "+res.Request.URL.Path)
+			p.onUnauthorized(key, res.Request.Method+" "+res.Request.URL.EscapedPath())
 		}
 		return nil
 	}
@@ -350,6 +368,9 @@ func (p *OllamaProxy) handle(proxy *httputil.ReverseProxy) http.HandlerFunc {
 			}()
 		}
 
+		if !limitBufferedBody(out, r) {
+			return
+		}
 		body := rewriteRequestBody(r)
 
 		if tracker != nil {
@@ -407,7 +428,7 @@ func (p *OllamaProxy) checkBrowser(w http.ResponseWriter, r *http.Request) (stri
 		return "", true
 	}
 	if !p.originAllowed(origin) {
-		log.Printf("Refused a request from web page %s; add it to GOOPHY_ALLOWED_ORIGINS to allow it", origin)
+		log.Printf("Refused a request from web page %q; add it to GOOPHY_ALLOWED_ORIGINS to allow it", origin)
 		return fmt.Sprintf("goophy does not serve web page %s; add it to GOOPHY_ALLOWED_ORIGINS to allow it", origin), false
 	}
 	setCORS(w, origin)
@@ -503,7 +524,7 @@ func (p *OllamaProxy) resolvePath(kind UpstreamKind, originalPath, directorPath 
 	}
 	final := strings.ReplaceAll(routed, "//", "/")
 	if Verbose.Load() && final != originalPath {
-		log.Printf("Routed %s -> %s for %s upstream", originalPath, final, kind)
+		log.Printf("Routed %q -> %q for %s upstream", originalPath, final, kind)
 	}
 	return final
 }
@@ -593,6 +614,54 @@ func rewriteRequestBody(r *http.Request) []byte {
 	return processed
 }
 
+// limitBufferedBody reads the body of a request goophy will buffer anyway
+// (see rewriteRequestBody, peekModelBody and the auto-pull replay) into
+// memory, refusing it with 413 when it exceeds maxBufferedBody. It reports
+// whether to go on serving r. Other requests are left untouched.
+func limitBufferedBody(w http.ResponseWriter, r *http.Request) bool {
+	if r.Body == nil || r.Body == http.NoBody || !buffersBody(r) {
+		return true
+	}
+	if r.ContentLength > maxBufferedBody {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return false
+	}
+	b, err := io.ReadAll(io.LimitReader(r.Body, maxBufferedBody+1))
+	r.Body.Close()
+	if len(b) > maxBufferedBody {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return false
+	}
+	// On a read error, forward what was read, as rewriteRequestBody does.
+	_ = err
+	setRequestBody(r, b)
+	return true
+}
+
+// buffersBody reports whether goophy reads r's body into memory.
+func buffersBody(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodPost:
+		return hasPathSuffix(r.URL.Path, modelBodyPaths) ||
+			hasPathSuffix(r.URL.Path, peekPaths) ||
+			hasPathSuffix(r.URL.Path, pullablePaths)
+	case http.MethodDelete:
+		return hasPathSuffix(r.URL.Path, modelBodyPaths)
+	}
+	return false
+}
+
+// peekBody buffers up to maxErrorBody of resp's body for inspection and puts
+// it back in front of the rest, so the client still gets the whole body.
+func peekBody(resp *http.Response) ([]byte, error) {
+	head, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(head), resp.Body), resp.Body}
+	return head, err
+}
+
 // setRequestBody replaces r.Body with b, keeping ContentLength and the
 // Content-Length header consistent with it so the transport never sees a
 // length/body mismatch.
@@ -675,14 +744,12 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	case resp.StatusCode != http.StatusOK:
 		// Buffer and log non-OK bodies, then restore them for downstream readers.
-		respBody, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		respBody, err := peekBody(resp)
 		if err != nil {
 			log.Printf("Error reading error response body: %v", err)
 		} else {
-			log.Printf("ERROR RESPONSE (%d): %s", resp.StatusCode, respBody)
+			log.Printf("ERROR RESPONSE (%d): %s", resp.StatusCode, logsafe.Truncate(string(respBody), maxLoggedBody))
 		}
-		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 	}
 
 	return resp, nil
@@ -706,12 +773,17 @@ func (t *customTransport) logExchange(req *http.Request, resp *http.Response) {
 // model, pulls the model and replays the original request. On any failure it
 // restores and returns the original error response.
 func (t *customTransport) handleMissingModel(req *http.Request, resp *http.Response, originalBody []byte) (*http.Response, error) {
-	respBody, err := io.ReadAll(resp.Body)
+	// Close the upstream response now rather than hold its connection through
+	// a pull, which can take minutes. A 400 body is small; past maxErrorBody
+	// it is cut short.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 	resp.Body.Close()
 
 	// restore returns the original error response with a re-readable body.
 	restore := func() (*http.Response, error) {
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+		resp.ContentLength = int64(len(respBody))
+		resp.Header.Del("Content-Length")
 		return resp, nil
 	}
 
@@ -766,7 +838,7 @@ func (t *customTransport) pullModel(req *http.Request, modelName string) error {
 		pullReq.Header.Set("Authorization", auth)
 	}
 
-	log.Printf("Sending pull request for model: %s", modelName)
+	log.Printf("Sending pull request for model: %q", modelName)
 	pullResp, err := t.client.Do(pullReq)
 	if err != nil {
 		return fmt.Errorf("executing pull request: %w", err)
@@ -774,8 +846,8 @@ func (t *customTransport) pullModel(req *http.Request, modelName string) error {
 	defer pullResp.Body.Close()
 
 	if pullResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(pullResp.Body)
-		return fmt.Errorf("pull returned status %d: %s", pullResp.StatusCode, body)
+		body, _ := io.ReadAll(io.LimitReader(pullResp.Body, maxLoggedBody))
+		return fmt.Errorf("pull returned status %d: %s", pullResp.StatusCode, logsafe.Truncate(string(body), maxLoggedBody))
 	}
 
 	// Drain the body so the pull fully completes before we retry.
@@ -862,12 +934,12 @@ func processModelBody(path string, body []byte) ([]byte, bool) {
 
 		updated := stripOpenAIPrefix(v)
 		if updated != v && Verbose.Load() {
-			log.Printf("Stripped openai/ prefix from model (%s field): %s -> %s", field, v, updated)
+			log.Printf("Stripped openai/ prefix from model (%s field): %q -> %q", field, v, updated)
 		}
 		if !isOpenAIEndpoint {
 			tagged := addDefaultTagToModel(updated)
 			if tagged != updated && Verbose.Load() {
-				log.Printf("Updated model in body (%s field): %s -> %s", field, updated, tagged)
+				log.Printf("Updated model in body (%s field): %q -> %q", field, updated, tagged)
 			}
 			updated = tagged
 		}
@@ -905,19 +977,19 @@ func syncShowNameModel(body map[string]any) bool {
 	case hasName && !hasModel:
 		body["model"] = nameVal
 		if Verbose.Load() {
-			log.Printf("Added missing 'model' field for /api/show using name=%s", nameVal)
+			log.Printf("Added missing 'model' field for /api/show using name=%q", nameVal)
 		}
 		return true
 	case hasModel && !hasName:
 		body["name"] = modelVal
 		if Verbose.Load() {
-			log.Printf("Added missing 'name' field for /api/show using model=%s", modelVal)
+			log.Printf("Added missing 'name' field for /api/show using model=%q", modelVal)
 		}
 		return true
 	case hasName && hasModel && nameVal != modelVal:
 		body["model"] = nameVal // prefer name, overwrite model to match
 		if Verbose.Load() {
-			log.Printf("Normalized differing name/model for /api/show: name=%s model=%s", nameVal, modelVal)
+			log.Printf("Normalized differing name/model for /api/show: name=%q model=%q", nameVal, modelVal)
 		}
 		return true
 	}

@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"log"
+	"os"
 	"strings"
 	"testing"
 )
@@ -63,5 +66,17 @@ func TestRefusedChecksTheLoginFirst(t *testing.T) {
 	l2.pending.Wait()
 	if out := buf.String(); !strings.Contains(out, "checking the goophy login failed") || strings.Contains(out, "run 'goophy login'") {
 		t.Errorf("failed check logged %q", out)
+	}
+}
+
+func TestNotedRefusalsAreBounded(t *testing.T) {
+	var l Live
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	for i := range maxNoted * 3 {
+		l.noteEndpoint(fmt.Sprintf("GET /x%d", i))
+	}
+	if len(l.noted) > maxNoted {
+		t.Fatalf("noted holds %d requests, want at most %d", len(l.noted), maxNoted)
 	}
 }

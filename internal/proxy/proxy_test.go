@@ -666,3 +666,50 @@ func TestBrowserGuard(t *testing.T) {
 		})
 	}
 }
+
+func TestOversizedBufferedBodyIsRefused(t *testing.T) {
+	called := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+	defer upstream.Close()
+	p, err := NewOllamaProxy("127.0.0.1", "0", upstream.URL, "", UpstreamOllama)
+	if err != nil {
+		t.Fatalf("NewOllamaProxy: %v", err)
+	}
+	body := io.MultiReader(strings.NewReader(`{"model":"x","prompt":"`), io.LimitReader(zeros{}, maxBufferedBody))
+	req := httptest.NewRequest(http.MethodPost, "/api/generate", body)
+	req.ContentLength = -1 // unknown, so the limit must apply while reading
+	rec := httptest.NewRecorder()
+	p.handle(p.newReverseProxy())(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge || called {
+		t.Fatalf("status %d, upstream called %v; want 413 and no upstream call", rec.Code, called)
+	}
+}
+
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = '0'
+	}
+	return len(p), nil
+}
+
+func TestErrorBodyReachesClientWhole(t *testing.T) {
+	big := strings.Repeat("e", maxErrorBody+100)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, big)
+	}))
+	defer upstream.Close()
+	p, err := NewOllamaProxy("127.0.0.1", "0", upstream.URL, "", UpstreamOpenAI)
+	if err != nil {
+		t.Fatalf("NewOllamaProxy: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	p.handle(p.newReverseProxy())(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if rec.Code != http.StatusInternalServerError || rec.Body.Len() != len(big) {
+		t.Fatalf("status %d, body %d bytes; want 500 and %d bytes", rec.Code, rec.Body.Len(), len(big))
+	}
+}

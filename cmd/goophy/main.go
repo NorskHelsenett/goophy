@@ -19,6 +19,7 @@ import (
 	goophy "github.com/NorskHelsenett/goophy"
 	"github.com/NorskHelsenett/goophy/internal/env"
 	"github.com/NorskHelsenett/goophy/internal/gateway"
+	"github.com/NorskHelsenett/goophy/internal/logsafe"
 	"github.com/NorskHelsenett/goophy/internal/proxy"
 	"github.com/NorskHelsenett/goophy/internal/stats"
 	"github.com/NorskHelsenett/goophy/internal/tui"
@@ -143,6 +144,10 @@ var knownCommands = map[string]bool{
 
 func main() {
 	args := os.Args[1:]
+
+	// Logs carry client-supplied paths and model names: keep each entry on
+	// one line and free of terminal escapes.
+	log.SetOutput(logsafe.Writer{W: os.Stderr})
 
 	if len(args) == 0 {
 		printGlobalHelp()
@@ -468,7 +473,7 @@ func runWithDashboard(ctx context.Context, cfg serverConfig) int {
 		Target:    cfg.targetURL,
 		APIKeySet: cfg.apiKey != "",
 	})
-	log.SetOutput(col)
+	log.SetOutput(logsafe.Writer{W: col})
 	log.SetFlags(log.Ltime)
 	log.Printf("goophy %s · API_KEY %s", displayVersion(), cfg.maskedAPIKey())
 	if n := cfg.loginNotice(); n != "" {
@@ -496,7 +501,7 @@ func runWithDashboard(ctx context.Context, cfg serverConfig) int {
 		err = errors.New("timed out waiting for the server to shut down")
 	}
 
-	log.SetOutput(os.Stderr)
+	log.SetOutput(logsafe.Writer{W: os.Stderr})
 	log.SetFlags(log.LstdFlags)
 
 	snap := col.Snapshot()
