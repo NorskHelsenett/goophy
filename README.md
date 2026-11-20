@@ -243,7 +243,7 @@ terminal instead of streaming logs. It is a preview and off by default. Switch t
 
 | Tab           | Shows                                                                     |
 | ------------- | ------------------------------------------------------------------------- |
-| **Dashboard** | Requests, errors, prompt/completion tokens, live tok/s, in-flight streams |
+| **Overview**  | Requests, errors, prompt/completion tokens, live tok/s, in-flight streams |
 | **Usage**     | Session token totals (incl. prompt-cache hits when reported), tokens per minute, usage by client (User-Agent) and the largest prompts |
 | **Requests**  | Every request with status, model, time to first byte, duration and tokens; `Enter` toggles details (path before/after routing, client) |
 | **Models**    | Per-model requests, tokens, average time to first byte and tok/s          |
