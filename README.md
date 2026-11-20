@@ -124,7 +124,7 @@ goophy usage     # what you have used the last 30 days (--days N)
 goophy logout    # revokes the token and forgets it
 ```
 
-`goophy login` opens `https://gw.chat.nhn.no` (override with `--gateway` or
+`goophy login` opens `https://ai.nhn.no` (override with `--gateway` or
 `GOOPHY_GATEWAY`). When no browser can be opened (over SSH, or with
 `--no-browser`) it prints a link to open on any machine, and asks for the code
 that page shows. The login expires after 7 days unused, and 30 days after you
@@ -150,6 +150,49 @@ a loopback address only answers to `localhost`-style `Host` names (and
 `host.docker.internal`), which blocks DNS rebinding. Programs such as curl,
 SDKs and editors send no `Origin` and are not affected. Without a key, any
 origin is allowed, as before.
+
+## Coding agents (opencode, pi)
+
+`goophy configure` points [opencode](https://opencode.ai) and
+[pi](https://pi.dev) at the local goophy, with `nhn-coder` as the default model:
+
+```bash
+goophy configure              # each of opencode and pi that is installed
+goophy configure opencode     # or just one; --model, --port, --dry-run, --print
+```
+
+- **opencode** (`~/.config/opencode/opencode.json`): adds the provider
+  `goophy` with the models goophy lists (or a default list when goophy is not
+  running), makes it the only enabled provider (`enabled_providers`), so cloud
+  providers are ignored even with keys in `auth.json`, sets `model` to
+  `goophy/nhn-coder`, and turns off update checks (`autoupdate: false`) and
+  session sharing to opencode.ai (`share: "disabled"`). Do not put cloud API
+  keys in opencode's `auth.json`.
+- **pi** (`~/.pi/agent`, or `$PI_CODING_AGENT_DIR`): installs
+  `extensions/goophy.ts`, which reads the model list from goophy each time pi
+  starts, and sets `goophy`/`nhn-coder` as the default in `settings.json`,
+  with install telemetry and analytics off. pi's version check against pi.dev
+  has no setting; set `PI_SKIP_VERSION_CHECK=1` to stop it.
+
+Other settings are kept, but the files are rewritten as plain JSON: comments
+are dropped and keys sorted. The file as it was before goophy first changed it
+is saved next to it as `.bak`. Rerunning `goophy configure` is safe.
+
+The report lists each setting it sets and the value it replaces (try
+`--dry-run` first), and the models it adds. It also warns about user-level
+configs that override these settings: opencode's `OPENCODE_CONFIG*`
+variables or a sibling `opencode.jsonc`/`config.json`, and a `goophy` provider
+in pi's `models.json`. It never changes those files. Project configs (a
+repository's `opencode.json` or `.pi/settings.json`) are not checked.
+
+A client counts as installed when its binary is on `PATH` or in a usual
+install directory (Homebrew, `~/.local/bin`, `~/.opencode/bin`, `~/.bun/bin`,
+...) or its config directory exists; others are skipped. Name a client to
+configure it anyway, or add `--print` to get the settings to enter by hand:
+
+```bash
+goophy configure opencode --print   # writes nothing; the settings go to stdout
+```
 
 ## Supported upstreams
 

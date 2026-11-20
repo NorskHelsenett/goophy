@@ -13,7 +13,7 @@ import (
 )
 
 // DefaultURL is the gateway goophy signs in to unless told otherwise.
-const DefaultURL = "https://gw.chat.nhn.no"
+const DefaultURL = "https://ai.nhn.no"
 
 // Credentials are what goophy keeps after a login.
 type Credentials struct {

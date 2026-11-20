@@ -55,6 +55,7 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "  login          Sign in to the LLM gateway (%s) in the browser\n", gateway.DefaultURL)
 	fmt.Fprintf(os.Stderr, "  logout         Revoke the gateway login and forget it\n")
 	fmt.Fprintf(os.Stderr, "  usage          Show your gateway usage\n")
+	fmt.Fprintf(os.Stderr, "  configure      Point opencode and pi at goophy (nhn-coder by default)\n")
 	fmt.Fprintf(os.Stderr, "  update         Check for and apply available updates\n\n")
 
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
@@ -132,11 +133,12 @@ func printUpdateHelp() {
 // the command token regardless of where flags are placed around it, so global
 // and command flags may appear either before or after the command.
 var knownCommands = map[string]bool{
-	"serve":  true,
-	"update": true,
-	"login":  true,
-	"logout": true,
-	"usage":  true,
+	"serve":     true,
+	"update":    true,
+	"login":     true,
+	"logout":    true,
+	"usage":     true,
+	"configure": true,
 }
 
 func main() {
@@ -170,6 +172,8 @@ func main() {
 		logoutCommand(cmdArgs)
 	case "usage":
 		usageCommand(cmdArgs)
+	case "configure":
+		configureCommand(cmdArgs)
 	default:
 		handleNoCommand(args)
 	}
