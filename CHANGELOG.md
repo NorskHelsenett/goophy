@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `goophy configure [opencode|pi]` points opencode and pi at the local goophy
+  with `nhn-coder` as the default model. For opencode it also makes goophy the
+  only enabled provider and turns off update checks and session sharing; for
+  pi it installs a provider extension that lists goophy's models at startup
+  and turns off pi's telemetry. Existing settings are kept; the original file
+  is saved as `.bak`.
+
+### Changed
+- `goophy login` signs in to `https://ai.nhn.no` by default (was
+  `https://gw.chat.nhn.no`). Existing logins keep the gateway they were made
+  against.
+
 ## [0.3.1] - 2026-11-13
 
 ### Fixed
