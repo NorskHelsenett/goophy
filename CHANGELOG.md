@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-11-20
+
+### Changed
+- The dashboard (`goophy serve --tui`, preview) is reworked into a fixed frame
+  of bordered panels sized to the terminal, so the layout no longer reflows as
+  data arrives. Tables drop trailing columns on narrow terminals, and the first
+  tab is now called **Overview**.
+
+### Security
+- Request paths, model names and upstream error bodies can no longer forge log
+  lines or send escape sequences to the terminal or the dashboard: control
+  characters are escaped in the log and in the fields the dashboard shows.
+- Request bodies goophy reads into memory are limited to 128 MiB (413 beyond
+  that); upstream error bodies are inspected up to 1 MiB and logged up to
+  2 KiB, and still reach the client whole.
+- The dashboard tracks at most 500 distinct models and clients (later ones
+  count as `(other)`), and the gateway's refused-request log dedup is bounded.
+- The server times out slow request headers (30s) and idle connections (2m).
+  Long streamed responses are not cut off.
+- `golang.org/x/text` 0.3.8 → 0.44.0.
+
 ## [0.4.0] - 2026-11-20
 
 ### Added
