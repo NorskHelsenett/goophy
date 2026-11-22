@@ -62,11 +62,11 @@ func printGlobalHelp() {
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
 	fmt.Fprintf(os.Stderr, "  HOST             Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for non-localhost)\n")
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
-	fmt.Fprintf(os.Stderr, "  API_ENDPOINT     Target API endpoint to forward requests to (default: http://localhost:11434)\n")
+	fmt.Fprintf(os.Stderr, "  API_ENDPOINT     Target API endpoint to forward requests to (default: the gateway you are logged in to, else https://ai.nhn.no)\n")
 	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n")
 	fmt.Fprintf(os.Stderr, "  GOOPHY_ALLOWED_ORIGINS  Web pages (e.g. https://app.example) that may call goophy while it adds\n")
 	fmt.Fprintf(os.Stderr, "                   an API key or the login; pages on localhost always may (default: none)\n")
-	fmt.Fprintf(os.Stderr, "  GOOPHY_TUI       Set to true to show the interactive dashboard (preview), like --tui\n")
+	fmt.Fprintf(os.Stderr, "  GOOPHY_TUI       Set to false to print logs instead of the dashboard, like --no-tui\n")
 	fmt.Fprintf(os.Stderr, "  \n")
 	fmt.Fprintf(os.Stderr, "  Environment variables can also be set in a .env file in the current directory\n")
 	fmt.Fprintf(os.Stderr, "  or specified using the --env-file flag.\n\n")
@@ -89,26 +89,29 @@ func printServeHelp() {
 	fmt.Fprintf(os.Stderr, "  -V, --verbose             Enable verbose logging\n")
 	fmt.Fprintf(os.Stderr, "  --host string             Interface to bind to (default: 127.0.0.1)\n")
 	fmt.Fprintf(os.Stderr, "  --port string             Port number to listen on (default: 22434)\n")
-	fmt.Fprintf(os.Stderr, "  --api-endpoint string     Target API endpoint to forward requests to (default: http://localhost:11434)\n")
+	fmt.Fprintf(os.Stderr, "  --api-endpoint string     Target API endpoint to forward requests to (default: the gateway you are logged in to, else https://ai.nhn.no)\n")
 	fmt.Fprintf(os.Stderr, "  --api-key string          API key for authentication (default: none)\n")
 	fmt.Fprintf(os.Stderr, "  --listen-all              Listen on all interfaces (shorthand for --host 0.0.0.0)\n")
-	fmt.Fprintf(os.Stderr, "  --tui                     Show the interactive dashboard instead of logs (preview)\n")
+	fmt.Fprintf(os.Stderr, "  --no-tui                  Print logs instead of showing the dashboard\n")
 	fmt.Fprintf(os.Stderr, "  --env-file string         Path to an env file to load configuration from\n\n")
 
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
 	fmt.Fprintf(os.Stderr, "  HOST             Interface to bind to (default: 127.0.0.1; use 0.0.0.0 for non-localhost)\n")
 	fmt.Fprintf(os.Stderr, "  PORT             Port number to listen on (default: 22434)\n")
-	fmt.Fprintf(os.Stderr, "  API_ENDPOINT     Target API endpoint to forward requests to (default: http://localhost:11434)\n")
+	fmt.Fprintf(os.Stderr, "  API_ENDPOINT     Target API endpoint to forward requests to (default: the gateway you are logged in to, else https://ai.nhn.no)\n")
 	fmt.Fprintf(os.Stderr, "  API_KEY          Optional API key for authentication (default: none)\n")
 	fmt.Fprintf(os.Stderr, "  GOOPHY_ALLOWED_ORIGINS  Web pages (e.g. https://app.example) that may call goophy while it adds\n")
 	fmt.Fprintf(os.Stderr, "                   an API key or the login; pages on localhost always may (default: none)\n")
-	fmt.Fprintf(os.Stderr, "  GOOPHY_TUI       Set to true to show the interactive dashboard (preview), like --tui\n")
+	fmt.Fprintf(os.Stderr, "  GOOPHY_TUI       Set to false to print logs instead of the dashboard, like --no-tui\n")
 	fmt.Fprintf(os.Stderr, "  \n")
 	fmt.Fprintf(os.Stderr, "  Environment variables can also be set in a .env file in the current directory\n")
 	fmt.Fprintf(os.Stderr, "  or specified using the --env-file flag.\n\n")
 
-	fmt.Fprintf(os.Stderr, "Preview: with --tui (or GOOPHY_TUI=true) in a terminal, serve shows an interactive\n")
-	fmt.Fprintf(os.Stderr, "dashboard (session stats, usage, requests, models, logs) instead of printing logs.\n\n")
+	fmt.Fprintf(os.Stderr, "In a terminal, serve shows an interactive dashboard (session stats, usage, requests,\n")
+	fmt.Fprintf(os.Stderr, "models, logs). Without an interactive terminal (a service, piped output, docker run\n")
+	fmt.Fprintf(os.Stderr, "without -t) it prints logs.\n\n")
+	fmt.Fprintf(os.Stderr, "Without API_ENDPOINT or API_KEY, serve proxies to the gateway you are logged in to\n")
+	fmt.Fprintf(os.Stderr, "(goophy login, %s by default).\n\n", gateway.DefaultURL)
 
 	fmt.Fprintf(os.Stderr, "Example usage:\n")
 	fmt.Fprintf(os.Stderr, "  API_ENDPOINT=https://api.example.com/v1 API_KEY=secret123 goophy serve\n\n")
@@ -259,13 +262,17 @@ func serveCommand(args []string) {
 	// Bind address. Empty default means "fall back to the HOST env / 127.0.0.1";
 	// an explicit flag value overrides the env.
 	listenAllFlag := serveFlags.Bool("listen-all", false, "Listen on all interfaces (shorthand for --host 0.0.0.0)")
-	tuiFlag := serveFlags.Bool("tui", false, "Show the interactive dashboard instead of logs (preview)")
+	noTUIFlag := serveFlags.Bool("no-tui", false, "Print logs instead of showing the dashboard")
+	// --tui was the opt-in while the dashboard was a preview; it is the
+	// default now. The flag stays so existing scripts keep working, and
+	// --tui=false turns the dashboard off like --no-tui.
+	tuiFlag := serveFlags.Bool("tui", true, "Show the dashboard (the default); --tui=false prints logs")
 	// Every option below supports both a --flag and an environment variable.
 	// An empty flag default means "fall back to the env var / built-in default";
 	// an explicit flag value overrides the env (see resolve).
 	hostFlag := serveFlags.String("host", "", "Interface to bind to (default 127.0.0.1; use 0.0.0.0 to allow non-localhost requests)")
 	portFlag := serveFlags.String("port", "", "Port number to listen on (default 22434)")
-	endpointFlag := serveFlags.String("api-endpoint", "", "Target API endpoint to forward requests to (default http://localhost:11434)")
+	endpointFlag := serveFlags.String("api-endpoint", "", "Target API endpoint to forward requests to (default: the gateway you are logged in to)")
 	apiKeyFlag := serveFlags.String("api-key", "", "API key for authentication (default none)")
 	// Deprecated alias for --api-endpoint, kept so existing setups keep working.
 	ollamaEndpointFlag := serveFlags.String("ollama-endpoint", "", "Deprecated: use --api-endpoint")
@@ -294,7 +301,20 @@ func serveCommand(args []string) {
 
 	// Without an upstream or key of its own, serve proxies to the gateway
 	// goophy is logged in to (goophy login).
-	login, useLogin := gatewayLogin(*endpointFlag, *ollamaEndpointFlag, *apiKeyFlag)
+	overrides := serveOverrides(*endpointFlag, *ollamaEndpointFlag, *apiKeyFlag)
+	login, useLogin, skipped, err := gatewayLogin(overrides)
+	if err != nil && overrides == "" {
+		fatal(err)
+	}
+	if !useLogin && overrides == "" {
+		fatal(fmt.Errorf("not logged in: run 'goophy login' to proxy to %s, or set API_ENDPOINT (and API_KEY) to use another upstream", gateway.DefaultURL))
+	}
+	// API_KEY without API_ENDPOINT goes to the gateway of a stored login,
+	// not to a hard-coded one: a key for a staging gateway must stay there.
+	defaultTarget := gateway.DefaultURL
+	if login.Gateway != "" {
+		defaultTarget = login.Gateway
+	}
 
 	// Resolve configuration: an explicit --flag wins over the env var, which
 	// wins over the built-in default.
@@ -307,7 +327,7 @@ func serveCommand(args []string) {
 	targetURL := resolveAlias(
 		alias{*endpointFlag, "API_ENDPOINT", "--api-endpoint"},
 		alias{*ollamaEndpointFlag, "OLLAMA_ENDPOINT", "--ollama-endpoint"},
-		"http://localhost:11434",
+		defaultTarget,
 	)
 
 	// Bind host follows the same rule, with --listen-all as a 0.0.0.0 shorthand
@@ -318,6 +338,9 @@ func serveCommand(args []string) {
 	}
 
 	cfg := serverConfig{host: host, port: port, targetURL: targetURL, apiKey: apiKey}
+	if skipped {
+		cfg.overrides = overrides
+	}
 	if useLogin {
 		// The login is a personal token: proxying with it on a reachable
 		// address would let anyone on the network use the gateway as you.
@@ -334,14 +357,11 @@ func serveCommand(args []string) {
 
 	proxy.UserAgent = "goophy/" + displayVersion()
 
-	// The dashboard is a preview: opt in with --tui or GOOPHY_TUI=true. It
-	// needs an interactive terminal on both ends; anything else (Docker,
-	// systemd/launchd, piped output) keeps the plain log stream.
-	wantTUI := *tuiFlag || strings.EqualFold(env.GetEnv("GOOPHY_TUI", ""), "true")
+	// The dashboard is the default. It needs an interactive terminal on both
+	// ends; anything else (Docker, systemd/launchd, piped output) keeps the
+	// plain log stream, as does --no-tui or GOOPHY_TUI=false.
+	wantTUI := dashboardWanted(serveFlags, *tuiFlag, *noTUIFlag, env.GetEnv("GOOPHY_TUI", ""))
 	isTTY := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
-	if wantTUI && !isTTY {
-		fmt.Fprintln(os.Stderr, "The dashboard (--tui / GOOPHY_TUI) needs an interactive terminal; printing logs instead.")
-	}
 	if wantTUI && isTTY {
 		code := runWithDashboard(ctx, cfg)
 		stop()
@@ -354,12 +374,50 @@ func serveCommand(args []string) {
 	}
 }
 
+// dashboardWanted decides whether serve shows the dashboard: an explicit
+// --no-tui or --tui[=bool] wins over GOOPHY_TUI, which wins over the
+// default (on). GOOPHY_TUI takes the usual false spellings (false, 0, no,
+// off).
+func dashboardWanted(fs *flag.FlagSet, tui, noTUI bool, envVal string) bool {
+	if noTUI {
+		return false
+	}
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "tui" {
+			set = true
+		}
+	})
+	if set {
+		return tui
+	}
+	switch strings.ToLower(strings.TrimSpace(envVal)) {
+	case "false", "0", "no", "off":
+		return false
+	}
+	return true
+}
+
 // serverConfig is the resolved configuration for the serve command.
 type serverConfig struct {
 	host, port, targetURL, apiKey string
 	// login is the gateway login serve proxies with, or nil when it uses
 	// API_ENDPOINT/API_KEY.
 	login *gateway.Credentials
+	// overrides names the settings that made serve skip a stored login
+	// ("API_ENDPOINT, API_KEY"), or "" when it did not or there is none.
+	overrides string
+}
+
+// overrideNotice warns that a stored login is not used, or "" when it is
+// (or there is none). A forgotten .env from before the login is easy to
+// miss: it wins, and sends every request to another upstream.
+func (c serverConfig) overrideNotice() string {
+	if c.overrides == "" {
+		return ""
+	}
+	return fmt.Sprintf("Not using your goophy login: %s set (environment, .env or flag) sends requests to %s. Remove them to proxy with the login.",
+		c.overrides, c.targetURL)
 }
 
 // loginNotice describes the gateway login in use, or "" without one.
@@ -389,6 +447,9 @@ func (c serverConfig) maskedAPIKey() string {
 func printConfig(c serverConfig) {
 	if n := c.loginNotice(); n != "" {
 		fmt.Println(n)
+	}
+	if n := c.overrideNotice(); n != "" {
+		fmt.Fprintln(os.Stderr, "Warning: "+n)
 	}
 	fmt.Println("Starting with configuration:")
 	fmt.Printf("  VERSION:          %s\n", displayVersion())
@@ -472,12 +533,16 @@ func runWithDashboard(ctx context.Context, cfg serverConfig) int {
 		Listen:    net.JoinHostPort(cfg.host, cfg.port),
 		Target:    cfg.targetURL,
 		APIKeySet: cfg.apiKey != "",
+		Overrides: cfg.overrides,
 	})
 	log.SetOutput(logsafe.Writer{W: col})
 	log.SetFlags(log.Ltime)
 	log.Printf("goophy %s · API_KEY %s", displayVersion(), cfg.maskedAPIKey())
 	if n := cfg.loginNotice(); n != "" {
 		log.Print(n)
+	}
+	if n := cfg.overrideNotice(); n != "" {
+		log.Print("Warning: " + n)
 	}
 
 	ctx, cancel := context.WithCancel(ctx)

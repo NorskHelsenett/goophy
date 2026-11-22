@@ -254,8 +254,14 @@ func (m Model) statusBar() string {
 		upStyle = sWarn
 	}
 
-	left := sBrand.Render(" goophy ") +
-		on(sDim).Render(" "+s.Info.Version+" ") + on(sWarn).Render("preview") + sep +
+	left := sBrand.Render(" goophy ")
+	// A stale .env that overrides the login sends everything elsewhere, and
+	// the startup log line scrolls away. It goes first on the left: the bar
+	// is clipped from the right, and spread drops the right side entirely.
+	if s.Info.Overrides != "" {
+		left += on(sWarn).Render(" ▲ login not used: "+s.Info.Overrides+" set ") + sep
+	}
+	left += on(sDim).Render(" "+s.Info.Version+" ") + sep +
 		on(upStyle).Render("● ") + on(sText).Render(s.Upstream) + sep +
 		on(sText).Render(s.Info.Listen) + on(sDim).Render(" → ") + on(sText).Render(s.Info.Target)
 	if !s.Info.APIKeySet {

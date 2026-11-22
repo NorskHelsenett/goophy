@@ -17,8 +17,8 @@ var UserAgent = "goophy"
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
-// NormalizeURL turns "gw.chat.nhn.no" or "https://gw.chat.nhn.no/v1/" into
-// "https://gw.chat.nhn.no".
+// NormalizeURL turns "ai.nhn.no" or "https://ai.nhn.no/v1/" into
+// "https://ai.nhn.no".
 func NormalizeURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
