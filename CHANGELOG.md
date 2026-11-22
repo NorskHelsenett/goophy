@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- `goophy serve` proxies to the gateway you are logged in to
+  (`https://ai.nhn.no` by default) unless `API_ENDPOINT` names another
+  upstream; it no longer falls back to a local Ollama at
+  `http://localhost:11434`. `API_KEY` without `API_ENDPOINT` goes to the
+  gateway of your login, or to `https://ai.nhn.no` without one. With none of
+  a login, `API_ENDPOINT`, `API_KEY` or `OLLAMA_ENDPOINT` it tells you to run
+  `goophy login`. The Docker image still targets Ollama through its
+  `OLLAMA_ENDPOINT`. An unreadable stored login is now reported as such
+  instead of as "not logged in".
+- The dashboard is no longer a preview and is on by default in a terminal.
+  `--no-tui`, `--tui=false` or `GOOPHY_TUI=false` (also `0`, `no`, `off`)
+  prints logs instead; a `--tui` flag wins over `GOOPHY_TUI`. Without an
+  interactive terminal (a service, piped output, `docker run` without `-t`)
+  goophy prints logs as before.
+- When `API_ENDPOINT`, `API_KEY` or `OLLAMA_ENDPOINT` (from the environment,
+  a `.env` file or a flag) overrides your goophy login, the dashboard's
+  status bar says so for as long as it runs, and the warning names the
+  upstream used instead. A forgotten `.env` silently sent requests to another
+  gateway.
+
 ## [0.4.1] - 2026-11-20
 
 ### Changed
@@ -59,8 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [0.3.0] - 2026-11-13
 
 ### Added
-- `goophy login` signs in to the NHN LLM gateway (default
-  `https://gw.chat.nhn.no`, or `--gateway` / `GOOPHY_GATEWAY`) through the
+- `goophy login` signs in to the NHN LLM gateway (or the one named by
+  `--gateway` / `GOOPHY_GATEWAY`) through the
   browser and stores a personal token in the user config directory
   (`~/Library/Application Support/goophy` on macOS, `~/.config/goophy` on
   Linux, `%LocalAppData%\goophy` on Windows). Without a browser (over SSH, or with `--no-browser`) it prints a link

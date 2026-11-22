@@ -187,13 +187,9 @@ func count(n int64) string {
 	}
 }
 
-// gatewayLogin returns the stored login to proxy with when serve is given no
-// upstream and no key of its own.
-func gatewayLogin(endpointFlag, ollamaEndpointFlag, apiKeyFlag string) (gateway.Credentials, bool) {
-	c, err := gateway.Load()
-	if err != nil {
-		return c, false
-	}
+// serveOverrides names the settings that give serve an upstream or key of
+// its own ("API_ENDPOINT, API_KEY"), or "" when there are none.
+func serveOverrides(endpointFlag, ollamaEndpointFlag, apiKeyFlag string) string {
 	var overrides []string
 	for _, o := range []struct{ flag, envKey, name string }{
 		{endpointFlag, "API_ENDPOINT", "--api-endpoint"},
@@ -207,18 +203,29 @@ func gatewayLogin(endpointFlag, ollamaEndpointFlag, apiKeyFlag string) (gateway.
 			overrides = append(overrides, o.envKey)
 		}
 	}
-	if len(overrides) > 0 {
-		// A forgotten .env from before the login is easy to miss: it wins,
-		// and its stale key gets every request refused.
-		fmt.Fprintf(os.Stderr, "Warning: not using your goophy login for %s, because %s %s set (environment, .env or flag).\n",
-			c.Gateway, strings.Join(overrides, ", "), map[bool]string{true: "is", false: "are"}[len(overrides) == 1])
-		fmt.Fprintln(os.Stderr, "         Remove them to proxy with the login.")
-		return gateway.Credentials{}, false
+	return strings.Join(overrides, ", ")
+}
+
+// gatewayLogin returns the stored login. use reports that serve proxies
+// with it: it has no upstream or key of its own (overrides is ""). skipped
+// reports a login that exists but is not used because of overrides; its
+// Gateway is still the default upstream for an API_KEY alone. err is a
+// stored login that cannot be read; no login at all is not an error.
+func gatewayLogin(overrides string) (c gateway.Credentials, use, skipped bool, err error) {
+	c, err = gateway.Load()
+	if errors.Is(err, gateway.ErrNotLoggedIn) {
+		return gateway.Credentials{}, false, false, nil
+	}
+	if err != nil {
+		return gateway.Credentials{}, false, false, fmt.Errorf("read your goophy login: %w (run 'goophy login' again)", err)
+	}
+	if overrides != "" {
+		return c, false, true, nil
 	}
 	if c.Expired() {
 		c = recheckLogin(c)
 	}
-	return c, true
+	return c, true, false, nil
 }
 
 // recheckLogin asks the gateway about a login whose stored expiry has

@@ -90,9 +90,10 @@ environment variable are both set, the flag wins.
 | ----------------------- | ----------------- | ------------------------ | ------------------------------------------------- |
 | `HOST`                  | `--host`          | `127.0.0.1`              | Interface to bind to (`--listen-all` = `0.0.0.0`) |
 | `PORT`                  | `--port`          | `22434`                  | Port to run the proxy server on                   |
-| `API_ENDPOINT`          | `--api-endpoint`  | `http://localhost:11434` | Target API endpoint to forward requests to        |
+| `API_ENDPOINT`          | `--api-endpoint`  | the gateway you are logged in to, else `https://ai.nhn.no` | Target API endpoint to forward requests to; set it (or `API_KEY`) and goophy ignores the login |
 | `API_KEY`               | `--api-key`       | _(empty)_                | API key used for authentication                   |
 | `GOOPHY_ALLOWED_ORIGINS` |               | _(empty)_                | Comma-separated web origins that may call goophy while it adds a key (see [Browsers](#browsers)) |
+| `GOOPHY_TUI`            | `--tui`, `--no-tui` | `true`                 | `false` (or `0`, `no`, `off`) prints logs instead of the dashboard |
 | `DISABLE_AUTO_UPDATE`   | —                 | `false`                  | Disable auto-update                               |
 | `UPDATE_CHECK_INTERVAL` | —                 | `24h`                    | How often to check for updates                    |
 
@@ -235,11 +236,12 @@ Auto-pull disabled: vLLM upstreams don't support /api/pull
 Run with `VERBOSE=true` to also log each path rewrite
 (`Routed /chat/completions -> /api/chat/completions for Open WebUI upstream`).
 
-## Dashboard (preview)
+## Dashboard
 
-`goophy serve --tui` (or `GOOPHY_TUI=true`) shows a live dashboard in the
-terminal instead of streaming logs. It is a preview and off by default. Switch tabs with `1`–`5`, `Tab` or the arrow keys;
-`q` quits and prints a short session summary.
+In a terminal, `goophy serve` shows a live dashboard instead of streaming logs;
+`--no-tui` (or `GOOPHY_TUI=false`) turns it off. Switch tabs with `1`–`5`, `Tab` or the arrow keys;
+`q` quits and prints a short session summary. When `API_ENDPOINT` or `API_KEY`
+overrides your goophy login, the status bar says so for as long as goophy runs.
 
 | Tab           | Shows                                                                     |
 | ------------- | ------------------------------------------------------------------------- |
@@ -257,9 +259,9 @@ them for streamed OpenAI-style requests, goophy adds
 upstream for generation endpoints. When usage isn't reported, output tokens are
 estimated from streamed chunks and shown with a `~`.
 
-Without `--tui` goophy prints logs exactly as before, with none of the above
-request changes. With `--tui` but no interactive terminal (Docker,
-systemd/launchd, piped output) it says so and prints logs instead.
+With `--no-tui` (or `--tui=false`), or without an interactive terminal
+(systemd/launchd, piped output, `docker run` without `-t`), goophy prints logs,
+with none of the above request changes.
 
 ## Usage
 
@@ -272,7 +274,8 @@ go build -o goophy cmd/goophy/main.go
 # Or with custom version
 go build -ldflags="-X main.version=0.1.3" -o goophy ./cmd/goophy/
 
-# Run the proxy with default settings
+# Sign in, then proxy to the gateway with that login
+./goophy login
 ./goophy serve
 
 # Run with custom settings using flags

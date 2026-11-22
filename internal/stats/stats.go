@@ -153,6 +153,9 @@ type Info struct {
 	Listen    string
 	Target    string
 	APIKeySet bool
+	// Overrides names the settings that made serve skip the goophy login
+	// ("API_ENDPOINT, API_KEY"), or "" when it uses the login or has none.
+	Overrides string
 }
 
 // Totals are session-wide counters.

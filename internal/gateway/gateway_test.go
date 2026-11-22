@@ -202,10 +202,10 @@ func TestCredentialsRoundTripPrivately(t *testing.T) {
 
 func TestNormalizeURL(t *testing.T) {
 	for in, want := range map[string]string{
-		"":                           DefaultURL,
-		"gw.chat.nhn.no":             "https://gw.chat.nhn.no",
-		"https://gw.chat.nhn.no/v1/": "https://gw.chat.nhn.no",
-		"http://localhost:8080/":     "http://localhost:8080",
+		"":                       DefaultURL,
+		"ai.nhn.no":              "https://ai.nhn.no",
+		"https://ai.nhn.no/v1/":  "https://ai.nhn.no",
+		"http://localhost:8080/": "http://localhost:8080",
 	} {
 		if got, err := NormalizeURL(in); err != nil || got != want {
 			t.Errorf("NormalizeURL(%q) = %q, %v; want %q", in, got, err, want)

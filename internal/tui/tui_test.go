@@ -35,7 +35,8 @@ func populated() *stats.Collector {
 // and the output must never exceed the terminal's width or height.
 func TestViewFitsTerminal(t *testing.T) {
 	sizes := [][2]int{{20, 5}, {60, 15}, {130, 40}, {250, 70}}
-	for _, c := range []*stats.Collector{stats.New(stats.Info{}), populated()} {
+	overridden := stats.New(stats.Info{Target: "http://other", Overrides: "API_ENDPOINT, API_KEY"})
+	for _, c := range []*stats.Collector{stats.New(stats.Info{}), populated(), overridden} {
 		for _, sz := range sizes {
 			var m tea.Model = New(c)
 			m, _ = m.Update(tea.WindowSizeMsg{Width: sz[0], Height: sz[1]})
@@ -92,5 +93,29 @@ func TestBarChart(t *testing.T) {
 	want := []string{"  █", "·██"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("barChart = %q, want %q", got, want)
+	}
+}
+
+// TestOverrideWarning: a login skipped because of API_ENDPOINT/API_KEY stays
+// visible in the status bar, where a startup log line would scroll away.
+func TestOverrideWarning(t *testing.T) {
+	for _, tc := range []struct {
+		overrides string
+		want      bool
+	}{{"API_ENDPOINT, API_KEY", true}, {"", false}} {
+		var m tea.Model = New(stats.New(stats.Info{Version: "test", Target: "http://other", Overrides: tc.overrides}))
+		// 80 columns: the warning must survive an ordinary terminal, where
+		// the right side of the bar is dropped.
+		for _, width := range []int{80, 200} {
+			m, _ = m.Update(tea.WindowSizeMsg{Width: width, Height: 30})
+			m, _ = m.Update(tickMsg{})
+			bar := strings.SplitN(m.View(), "\n", 2)[0]
+			if got := strings.Contains(bar, "login not used: API_ENDPOINT, API_KEY set"); got != tc.want {
+				t.Errorf("width %d, overrides %q: warning shown = %v, want %v:\n%s", width, tc.overrides, got, tc.want, bar)
+			}
+			if strings.Contains(bar, "preview") {
+				t.Errorf("status bar still says preview:\n%s", bar)
+			}
+		}
 	}
 }
