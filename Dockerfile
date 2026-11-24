@@ -45,3 +45,21 @@ EXPOSE 22434
 # Run the application - use ENTRYPOINT with CMD to allow passing arguments
 ENTRYPOINT ["/app/goophy"]
 CMD []
+
+# Build provenance (populated by CI build-args: GIT_COMMIT/GIT_BRANCH/BUILD_DATE/VERSION).
+# Kept last so per-build values don't invalidate the cache of the steps above.
+ARG GIT_COMMIT
+ARG GIT_BRANCH
+ARG BUILD_DATE
+ARG VERSION=dev
+LABEL org.opencontainers.image.source="https://github.com/NorskHelsenett/goophy" \
+      org.opencontainers.image.revision="$GIT_COMMIT" \
+      org.opencontainers.image.ref.name="$GIT_BRANCH" \
+      org.opencontainers.image.created="$BUILD_DATE" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.title="goophy" \
+      org.opencontainers.image.description="Ollama proxy that adds authentication to requests" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.vendor="Norsk helsenett SF" \
+      org.opencontainers.image.url="https://github.com/NorskHelsenett/goophy" \
+      org.opencontainers.image.documentation="https://github.com/NorskHelsenett/goophy#readme"
